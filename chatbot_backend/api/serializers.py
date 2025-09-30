@@ -39,12 +39,11 @@ class GenerateNoteResponseSerializer(serializers.Serializer):
 
 
 # PUBLIC_INTERFACE
-class OneDriveSaveRequestSerializer(serializers.Serializer):
-    """Serializer for saving a note to OneDrive."""
+class LocalSaveRequestSerializer(serializers.Serializer):
+    """Serializer for saving a note to local disk."""
     conversation_id = serializers.UUIDField(help_text="Conversation ID")
     note_text = serializers.CharField(help_text="The note text to save as .txt")
     filename = serializers.CharField(help_text="Desired filename, .txt will be enforced if not present")
-    onedrive_folder_path = serializers.CharField(help_text="Target OneDrive folder path, e.g., /Documents/HealthNotes")
 
 
 # PUBLIC_INTERFACE

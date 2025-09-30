@@ -25,7 +25,7 @@ from django.views.decorators.csrf import csrf_exempt
 OCEAN_INFO = openapi.Info(
     title="Patient Health Chatbot API",
     default_version="v1",
-    description="Modern, minimalist REST API for patient conversations, disease note generation, and OneDrive note storage.",
+    description="Modern, minimalist REST API for patient conversations, disease note generation, and local note storage.",
     contact=openapi.Contact(name="Support", email="support@example.com"),
     license=openapi.License(name="MIT"),
 )

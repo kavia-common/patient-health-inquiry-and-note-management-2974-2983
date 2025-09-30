@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Tuple
 
-import requests
 from django.utils import timezone
 
 from .models import Conversation, Message
@@ -117,80 +116,50 @@ class NoteGenerator:
 
 
 # PUBLIC_INTERFACE
-class OneDriveClient:
-    """Minimal Microsoft Graph OneDrive client using OAuth2 Client Credentials or Authorization Code (env-configured)."""
+class LocalNoteStorageError(Exception):
+    """Raised when saving a note to local storage fails."""
+    pass
 
-    def __init__(self) -> None:
-        # Environment variables (documented in .env.example)
-        self.tenant_id = os.getenv("ONEDRIVE_TENANT_ID", "")
-        self.client_id = os.getenv("ONEDRIVE_CLIENT_ID", "")
-        self.client_secret = os.getenv("ONEDRIVE_CLIENT_SECRET", "")
-        self.scope = os.getenv("ONEDRIVE_SCOPE", "https://graph.microsoft.com/.default")
-        self.auth_mode = os.getenv("ONEDRIVE_AUTH_MODE", "client_credentials")  # or "authorization_code"
-        self.redirect_uri = os.getenv("ONEDRIVE_REDIRECT_URI", "")
 
-        # For delegated flow (authorization code)
-        self.user_access_token = os.getenv("ONEDRIVE_USER_ACCESS_TOKEN", "")
+# PUBLIC_INTERFACE
+class LocalNoteStorage:
+    """Save notes to a fixed local directory on the host machine."""
 
-        self.graph_base = "https://graph.microsoft.com/v1.0"
+    def __init__(self, base_dir: str | None = None) -> None:
+        """
+        base_dir: target directory to save notes. If None, uses C:\\Nilesh_TATA\\Prescription.
+        """
+        # Default fixed path as requested
+        self.base_dir = base_dir or r"C:\Nilesh_TATA\Prescription"
 
     # PUBLIC_INTERFACE
-    def save_text_file(self, folder_path: str, filename: str, content: str) -> dict:
-        """Save a text file to a user's OneDrive folder using Microsoft Graph.
-        Returns the Graph API file item JSON.
-
-        Note: For client_credentials, access is typically to application drives or shared drives
-        with proper permissions. For user personal OneDrive, delegated access (authorization_code)
-        with a user access token is required.
+    def save_text_file(self, filename: str, content: str) -> dict:
         """
-        token = self._get_access_token()
-        if not filename.lower().endswith(".txt"):
-            filename = f"{filename}.txt"
+        Save the given content as a .txt file in the base directory.
 
-        # Encode content as binary
-        data = content.encode("utf-8")
+        Returns a dict with details: { "path": ..., "bytes_written": ..., "filename": ... }
+        Raises LocalNoteStorageError on failures.
+        """
+        try:
+            # Ensure directory exists
+            os.makedirs(self.base_dir, exist_ok=True)
 
-        # Build upload URL
-        # Using drive root special path: /me/drive/root:/path/to/file:/content
-        # folder_path should start with "/" or be relative; normalize
-        normalized = folder_path if folder_path.startswith("/") else f"/{folder_path}"
-        upload_url = f"{self.graph_base}/me/drive/root:{normalized}/{filename}:/content"
+            # Ensure .txt extension
+            if not filename.lower().endswith(".txt"):
+                filename = f"{filename}.txt"
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "text/plain",
-        }
-        resp = requests.put(upload_url, headers=headers, data=data, timeout=60)
-        if resp.status_code not in (200, 201):
-            raise OneDriveError(f"OneDrive upload failed: {resp.status_code} {resp.text}")
+            # Normalize filename to avoid path traversal
+            safe_name = os.path.basename(filename)
+            target_path = os.path.join(self.base_dir, safe_name)
 
-        return resp.json()
+            data = content.encode("utf-8")
+            with open(target_path, "wb") as f:
+                f.write(data)
 
-    def _get_access_token(self) -> str:
-        """Get an access token based on configured mode."""
-        if self.auth_mode == "authorization_code":
-            if not self.user_access_token:
-                raise OneDriveError("Missing ONEDRIVE_USER_ACCESS_TOKEN for delegated access.")
-            return self.user_access_token
-
-        # Default to client credentials
-        for var in ("ONEDRIVE_TENANT_ID", "ONEDRIVE_CLIENT_ID", "ONEDRIVE_CLIENT_SECRET"):
-            if not os.getenv(var):
-                raise OneDriveError(f"Missing environment variable: {var}")
-
-        token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
-        data = {
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "scope": self.scope,
-            "grant_type": "client_credentials",
-        }
-        resp = requests.post(token_url, data=data, timeout=30)
-        if resp.status_code != 200:
-            raise OneDriveError(f"Failed to obtain access token: {resp.status_code} {resp.text}")
-        return resp.json().get("access_token", "")
-
-
-class OneDriveError(Exception):
-    """OneDrive-related error."""
-    pass
+            return {
+                "path": target_path,
+                "bytes_written": len(data),
+                "filename": safe_name,
+            }
+        except Exception as e:
+            raise LocalNoteStorageError(f"Failed to save file locally: {e}") from e

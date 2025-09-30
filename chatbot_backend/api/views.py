@@ -13,11 +13,11 @@ from .serializers import (
     ContinueConversationSerializer,
     GenerateNoteRequestSerializer,
     GenerateNoteResponseSerializer,
-    OneDriveSaveRequestSerializer,
+    LocalSaveRequestSerializer,
     ConversationStatusSerializer,
 )
 from .models import Conversation
-from .services import ConversationManager, NoteGenerator, OneDriveClient, OneDriveError
+from .services import ConversationManager, NoteGenerator, LocalNoteStorage, LocalNoteStorageError
 
 
 def ocean_ok(data: dict, status_code=status.HTTP_200_OK):
@@ -176,40 +176,41 @@ def generate_note(request):
 
 @swagger_auto_schema(
     method="post",
-    operation_id="save_note_to_onedrive",
-    operation_summary="Save a note to OneDrive",
-    operation_description="Uploads a .txt file to the specified OneDrive folder path using Microsoft Graph API.",
-    request_body=OneDriveSaveRequestSerializer,
+    operation_id="save_note_to_local",
+    operation_summary="Save a note to local disk",
+    operation_description="Saves a .txt file to the local folder C:\\Nilesh_TATA\\Prescription on the host machine.",
+    request_body=LocalSaveRequestSerializer,
     responses={
         200: openapi.Response("OK"),
         400: openapi.Response("Bad Request"),
-        401: openapi.Response("Unauthorized"),
         500: openapi.Response("Server Error"),
     },
-    tags=["OneDrive"],
+    tags=["Local Storage"],
 )
 @api_view(["POST"])
 @permission_classes([AllowAny])
-def save_note_to_onedrive(request):
-    """Save provided note text as a .txt file to a OneDrive folder via Microsoft Graph API.
-    Requires environment variables for credentials or delegated access token.
+def save_note_to_local(request):
+    """Save provided note text as a .txt file to local disk at C:\\Nilesh_TATA\\Prescription.
+
+    Returns:
+      - On success: { path, bytes_written, filename }
+      - On failure: error payload with details
     """
-    serializer = OneDriveSaveRequestSerializer(data=request.data)
+    serializer = LocalSaveRequestSerializer(data=request.data)
     if not serializer.is_valid():
         return ocean_error("Invalid input", details=serializer.errors)
 
-    client = OneDriveClient()
+    storage = LocalNoteStorage()
     try:
-        result = client.save_text_file(
-            folder_path=serializer.validated_data["onedrive_folder_path"],
+        result = storage.save_text_file(
             filename=serializer.validated_data["filename"],
             content=serializer.validated_data["note_text"],
         )
-        return ocean_ok({"upload_result": result})
-    except OneDriveError as e:
-        return ocean_error(str(e), code="onedrive_error", status_code=status.HTTP_400_BAD_REQUEST)
+        return ocean_ok({"save_result": result})
+    except LocalNoteStorageError as e:
+        return ocean_error(str(e), code="local_save_error", status_code=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return ocean_error("Unexpected error while saving to OneDrive", details={"detail": str(e)}, status_code=500)
+        return ocean_error("Unexpected error while saving locally", details={"detail": str(e)}, status_code=500)
 
 
 @swagger_auto_schema(

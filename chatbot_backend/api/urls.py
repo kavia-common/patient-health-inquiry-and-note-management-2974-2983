@@ -5,7 +5,7 @@ from .views import (
     send_message,
     continue_conversation,
     generate_note,
-    save_note_to_onedrive,
+    save_note_to_local,
     conversation_status,
 )
 
@@ -15,6 +15,6 @@ urlpatterns = [
     path('conversations/send/', send_message, name='SendMessage'),
     path('conversations/continue/', continue_conversation, name='ContinueConversation'),
     path('notes/generate/', generate_note, name='GenerateNote'),
-    path('onedrive/save/', save_note_to_onedrive, name='SaveNoteToOneDrive'),
+    path('notes/save-local/', save_note_to_local, name='SaveNoteToLocal'),
     path('conversations/status/', conversation_status, name='ConversationStatus'),
 ]

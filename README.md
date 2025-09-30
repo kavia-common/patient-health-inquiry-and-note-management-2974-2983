@@ -37,7 +37,11 @@ Conversations:
 - POST /api/conversations/start/
   body: { patient_id, metadata? }
 - POST /api/conversations/send/
-  body: { conversation_id, sender: "patient"|"bot", text }
+  body: { conversation_id, sender: "patient"|"bot", text, patient_id? }
+  notes:
+    - If conversation_id exists, the message is appended.
+    - If conversation_id does not exist and patient_id is provided, a new conversation is created for that patient and the message is appended. Response status 201.
+    - If conversation_id does not exist and patient_id is not provided, 404 is returned with a helpful hint.
 - POST /api/conversations/continue/
   body: { conversation_id, messages: [{sender, text}, ...] }
 - GET /api/conversations/status/?conversation_id=<uuid>

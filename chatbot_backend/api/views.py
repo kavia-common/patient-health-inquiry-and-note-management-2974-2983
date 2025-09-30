@@ -90,29 +90,73 @@ def start_conversation(request):
     method="post",
     operation_id="send_message",
     operation_summary="Send a single message",
-    operation_description="Appends a single message to an existing conversation.",
+    operation_description=(
+        "Appends a single message to an existing conversation. "
+        "If the provided conversation_id does not match an existing conversation and a patient_id is provided in the body, "
+        "a new conversation will be created for that patient and the message appended. "
+        "If conversation_id is invalid or not found and patient_id is not provided, a 404 error is returned."
+    ),
     request_body=MessageSerializer,
-    responses={200: openapi.Response("OK")},
+    responses={
+        200: openapi.Response("OK", schema=openapi.Schema(type=openapi.TYPE_OBJECT)),
+        201: openapi.Response("Created (new conversation created and message appended)", schema=openapi.Schema(type=openapi.TYPE_OBJECT)),
+        400: openapi.Response("Validation Error"),
+        404: openapi.Response("Conversation Not Found"),
+    },
     tags=["Conversations"],
 )
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def send_message(request):
-    """Append a single message to a conversation."""
+    """
+    Append a single message to a conversation.
+
+    Public behavior:
+    - If conversation exists: append message.
+    - If conversation does not exist and patient_id provided: create conversation then append message.
+    - Otherwise: return 404 with guidance.
+    """
     serializer = MessageSerializer(data=request.data)
     if not serializer.is_valid():
         return ocean_error("Invalid input", details=serializer.errors)
 
     cm = ConversationManager()
-    try:
-        cm.append_messages(
-            serializer.validated_data["conversation_id"],
-            [(serializer.validated_data["sender"], serializer.validated_data["text"])],
-        )
-    except Conversation.DoesNotExist:
-        return ocean_error("Conversation not found", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+    conversation_id = serializer.validated_data["conversation_id"]
+    sender = serializer.validated_data["sender"]
+    text = serializer.validated_data["text"]
+    patient_id = serializer.validated_data.get("patient_id")
 
-    return ocean_ok({"conversation_id": str(serializer.validated_data["conversation_id"]), "appended": 1})
+    try:
+        cm.append_messages(conversation_id, [(sender, text)])
+        created = False
+        convo_id_str = str(conversation_id)
+        status_code = status.HTTP_200_OK
+    except Conversation.DoesNotExist:
+        # Graceful handling: create if patient_id provided; else return detailed 404
+        if patient_id:
+            convo = cm.start_conversation(patient_id=patient_id, metadata={})
+            cm.append_messages(convo.id, [(sender, text)])
+            created = True
+            convo_id_str = str(convo.id)
+            status_code = status.HTTP_201_CREATED
+        else:
+            return ocean_error(
+                "Conversation not found",
+                code="not_found",
+                details={
+                    "hint": "Provide a valid existing conversation_id or include patient_id to create a new conversation automatically.",
+                },
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+    return ocean_ok(
+        {
+            "conversation_id": convo_id_str,
+            "appended": 1,
+            "created_new_conversation": created,
+        },
+        status_code=status_code,
+    )
 
 
 @swagger_auto_schema(

@@ -10,10 +10,18 @@ class StartConversationSerializer(serializers.Serializer):
 
 # PUBLIC_INTERFACE
 class MessageSerializer(serializers.Serializer):
-    """Serializer for sending a message within a conversation."""
+    """Serializer for sending a message within a conversation.
+    
+    Behavior:
+    - If conversation_id references an existing conversation, the message will be appended.
+    - If the conversation does not exist and patient_id is provided, a new conversation will be created
+      for that patient and the message appended.
+    - If the conversation does not exist and patient_id is not provided, the request will be rejected.
+    """
     conversation_id = serializers.UUIDField(help_text="Conversation ID")
     sender = serializers.ChoiceField(choices=["patient", "bot"], help_text="Message sender")
     text = serializers.CharField(help_text="Message content")
+    patient_id = serializers.CharField(required=False, allow_blank=False, help_text="Patient ID to create a conversation if conversation_id is not found")
 
 
 # PUBLIC_INTERFACE

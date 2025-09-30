@@ -1,0 +1,4 @@
+{
+    "command": "python manage.py test",
+    "working_directory": "/home/kavia/workspace/code-generation/patient-health-inquiry-and-note-management-2974-2983/chatbot_backend"
+}

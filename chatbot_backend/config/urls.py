@@ -21,17 +21,22 @@ from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from django.views.decorators.csrf import csrf_exempt
 
+# Ocean Professional API metadata
+OCEAN_INFO = openapi.Info(
+    title="Patient Health Chatbot API",
+    default_version="v1",
+    description="Modern, minimalist REST API for patient conversations, disease note generation, and OneDrive note storage.",
+    contact=openapi.Contact(name="Support", email="support@example.com"),
+    license=openapi.License(name="MIT"),
+)
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
 ]
 
 schema_view = get_schema_view(
-   openapi.Info(
-      title="My API",
-      default_version='v1',
-      description="Test description",
-   ),
+   OCEAN_INFO,
    public=True,
    permission_classes=(permissions.AllowAny,),
 )
@@ -50,11 +55,7 @@ def get_full_url(request):
 def dynamic_schema_view(request, *args, **kwargs):
     url = get_full_url(request)
     view = get_schema_view(
-        openapi.Info(
-            title="My API",
-            default_version='v1',
-            description="API Docs",
-        ),
+        OCEAN_INFO,
         public=True,
         url=url,
     )
@@ -63,5 +64,5 @@ def dynamic_schema_view(request, *args, **kwargs):
 urlpatterns += [
     re_path(r'^docs/$', dynamic_schema_view, name='schema-swagger-ui'),
     re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
-    re_path(r'^swagger\.json$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
+    re_path(r'^openapi\.json$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
 ]

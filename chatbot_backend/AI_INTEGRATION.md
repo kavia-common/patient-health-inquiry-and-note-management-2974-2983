@@ -36,7 +36,7 @@ Local note save directory:
 
 - Follow-up question generation and conversational conclusion
   - Endpoints:
-    - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up. It avoids repeating domains, advances through an intake plan, and when enough information is gathered, it returns a concluding summary (prefixed with "Conclusion:") instead of another question; this is saved as a bot message and surfaced as `ai_follow_up.conclusion=true`.
+    - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up. It avoids repeating domains, advances through an intake plan, and when enough information is gathered, it returns a concluding summary (prefixed with "Conclusion:") instead of another question; this is saved as a bot message and surfaced as `ai_follow_up.conclusion=true`. Conclusions explicitly name the main issue when possible (e.g., "Patient presents with headache localized to the forehead for ~4 hours; no meds taken; no allergies").
     - POST /api/ai/next-follow-up/: Directly request a follow-up or conclusion based on context.
   - Logic: `api.services.AIConversationHelper` orchestrates domain tracking (`Conversation.metadata.intake`) and decides whether to ask another question or produce a conclusion. It calls `api.ai.AIClient.ask_follow_up()` with improved prompts.
   - Prompts:

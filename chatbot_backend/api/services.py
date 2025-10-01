@@ -241,10 +241,10 @@ class AIConversationHelper:
     def _determine_next_domain(self, meta: dict, patient_texts: list[str]) -> str | None:
         """Choose the next domain to ask about, skipping domains inferred from patient content.
 
-        Behavior improvements:
-        - Treat variations, repeats, and clarifications of symptoms as a valid chief complaint.
-        - Immediately mark chief_concern as captured once any meaningful symptom-like phrase appears.
-        - Only prompt for chief complaint if absolutely no meaningful complaint is present.
+        Improvements:
+        - Recognize any symptom-like text as a valid chief complaint and mark it.
+        - Only ask for chief complaint when no meaningful complaint has been provided.
+        - Infer coverage of other domains from context to avoid repetition.
         """
         intake = meta["intake"]
         asked = set(intake.get("domains_asked", []))
@@ -253,23 +253,15 @@ class AIConversationHelper:
         normalized_texts = [t.strip().lower() for t in patient_texts if isinstance(t, str)]
         joined = " ".join(normalized_texts)
 
-        # A set of tokens/phrases that imply a complaint was provided
+        # Symptom markers that imply a complaint
         symptom_markers = [
-            # pain-like
             "pain", "ache", "hurt", "sore", "tender", "cramp",
-            # infection/fever/cold
             "fever", "temperature", "chills", "sweats", "cold", "flu",
-            # respiratory
             "cough", "phlegm", "sputum", "shortness of breath", "sob", "wheez",
-            # neuro/head
             "headache", "migraine", "dizzy", "lightheaded", "faint",
-            # gi
             "nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal", "constipation", "bloated",
-            # derm
             "rash", "itch", "hives", "skin", "lesion",
-            # cardio
             "chest pain", "pressure in chest", "palpitation",
-            # misc
             "swelling", "edema", "fatigue", "tired", "weakness",
         ]
 
@@ -277,7 +269,6 @@ class AIConversationHelper:
         def is_meaningful(text: str) -> bool:
             if not text:
                 return False
-            # Filter out acknowledgements/confirmations that don't carry a complaint by themselves
             filler = ["ok", "okay", "fine", "yes", "no", "hello", "hi", "hey", "thanks", "thank you", "please clarify"]
             t = text.strip().lower()
             if t in filler or len(t) < 3:
@@ -310,14 +301,12 @@ class AIConversationHelper:
 
         # If there is a meaningful complaint (symptom markers found), mark chief_concern as captured
         if complaint_present and "chief_concern" not in asked:
-            # Persist this immediately in metadata so subsequent turns do not re-ask
             intake["domains_asked"] = list(asked.union({"chief_concern"}))
             intake["coverage_score"] = len(set(intake["domains_asked"]))
             asked = set(intake["domains_asked"])
 
-        # If no complaint detected and nothing meaningful provided, ask for chief complaint
+        # If no complaint detected, only ask for it when the user hasn't provided anything meaningful
         if not complaint_present and "chief_concern" not in asked:
-            # Only prompt again if user hasn't provided anything meaningful yet
             if not any_meaningful_text:
                 return "chief_concern"
 
@@ -343,8 +332,12 @@ class AIConversationHelper:
         intake = meta["intake"]
         coverage = int(intake.get("coverage_score", 0))
         concluded = bool(intake.get("concluded", False))
-        # Conclude if coverage threshold reached or no further domains
-        return (coverage >= self.MIN_COVERAGE_FOR_CONCLUSION or next_domain is None) and not concluded
+        asked = set(intake.get("domains_asked", []))
+        # Require chief complaint grounding and at least 4 of key HPI-related domains before concluding
+        hpi_core = {"onset_duration", "severity", "progression", "modifiers"}
+        hpi_covered = len(hpi_core.intersection(asked))
+        has_chief = "chief_concern" in asked
+        return (has_chief and (coverage >= self.MIN_COVERAGE_FOR_CONCLUSION or (hpi_covered >= 2 and next_domain is None))) and not concluded
 
     # PUBLIC_INTERFACE
     def next_follow_up(self, conversation: Conversation) -> str:
@@ -389,6 +382,37 @@ class AIConversationHelper:
             text = (text or "").strip()
             if text and not text.lower().startswith("conclusion"):
                 text = f"Conclusion: {text}"
+
+            # Ensure the conclusion explicitly names the main issue if possible
+            if text.lower().startswith("conclusion"):
+                # Detect an issue term from recent patient texts
+                recent_user = " ".join(patient_texts[-3:]).lower()
+                issue_terms = [
+                    ("chest pain", ["chest pain","pressure in chest"]),
+                    ("shortness of breath", ["shortness of breath","sob"]),
+                    ("headache", ["headache","migraine"]),
+                    ("cough", ["cough","phlegm","sputum"]),
+                    ("fever", ["fever","temperature","chills","sweats"]),
+                    ("abdominal pain", ["stomach","abdomen","abdominal","belly pain"]),
+                    ("nausea/vomiting/diarrhea", ["nausea","vomit","diarrhea"]),
+                    ("rash", ["rash","itch","hives","skin","lesion"]),
+                    ("dizziness", ["dizzy","lightheaded","faint"]),
+                    ("generalized pain", ["pain","ache","hurt","sore","tender","cramp"]),
+                    ("fatigue", ["fatigue","tired","weakness"]),
+                    ("swelling", ["swelling","edema"]),
+                ]
+                detected = None
+                for label, kws in issue_terms:
+                    if any(k in recent_user for k in kws):
+                        detected = label
+                        break
+                if detected and "presents with" not in text.lower():
+                    # Insert a concise "presents with <issue>" phrase after the "Conclusion:" prefix if missing
+                    if text.endswith("."):
+                        text = text[:-1]
+                    # If already includes the term, avoid duplication
+                    if detected not in text.lower():
+                        text = f"Conclusion: Patient presents with {detected}. " + text[len("Conclusion: "):]
             return text
 
         # Otherwise, continue with another follow-up targeting the next domain

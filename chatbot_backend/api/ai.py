@@ -122,8 +122,14 @@ class AIClient:
     def _post(self, payload: dict) -> dict:
         # No network for mock
         if self.cfg.provider == "mock":
-            # Deterministic but varied heuristic based on last user message and some prior context.
+            # Deterministic, domain-aware mock that identifies complaint and asks issue-specific follow-ups.
             messages = payload.get("messages", [])
+            # Extract a possible explicit "conclusion" request from system/user content
+            sys_user_text = " ".join(
+                m.get("content", "") for m in messages if m.get("role") in ("system", "user")
+            ).lower()
+            wants_conclusion = ("concluding summary" in sys_user_text) or ("compose a concluding summary" in sys_user_text)
+
             user_texts = [m.get("content", "") for m in messages if m.get("role") == "user" and m.get("content")]
             last_user = user_texts[-1] if user_texts else ""
             lower = (last_user or "").lower()
@@ -135,80 +141,107 @@ class AIClient:
                 idx = (sum(ord(c) for c in last_user) if last_user else 0) % len(options)
                 return options[idx]
 
-            # Determine if the user has described any chief complaint yet
-            has_complaint = any(
-                kw in (lower + " " + earlier)
-                for kw in [
-                    # pain-like
-                    "pain", "ache", "hurt", "sore", "tender", "cramp",
-                    # infection/fever/cold
-                    "fever", "temperature", "chills", "sweats", "cold", "flu",
-                    # respiratory
-                    "cough", "phlegm", "sputum", "shortness of breath", "sob", "wheez",
-                    # neuro/head
-                    "headache", "migraine", "dizzy", "lightheaded", "faint",
-                    # gi
-                    "nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal", "constipation", "bloated",
-                    # derm
-                    "rash", "itch", "hives", "skin", "lesion",
-                    # cardio
-                    "chest pain", "pressure in chest", "palpitation",
-                    # misc
-                    "swelling", "edema", "fatigue", "tired", "weakness",
-                ]
-            )
+            # Detect key complaint tokens to name the issue
+            issue_tokens = [
+                ("chest pain", ["chest pain", "pressure in chest"]),
+                ("shortness of breath", ["shortness of breath", "sob"]),
+                ("headache", ["headache", "migraine"]),
+                ("cough", ["cough", "phlegm", "sputum"]),
+                ("fever", ["fever", "temperature", "chills", "sweats"]),
+                ("abdominal pain", ["stomach", "abdomen", "abdominal", "belly pain"]),
+                ("nausea/vomiting/diarrhea", ["nausea", "vomit", "diarrhea"]),
+                ("rash", ["rash", "itch", "hives", "skin", "lesion"]),
+                ("dizziness", ["dizzy", "lightheaded", "faint"]),
+                ("generalized pain", ["pain", "ache", "hurt", "sore", "tender", "cramp"]),
+                ("fatigue", ["fatigue", "tired", "weakness"]),
+                ("swelling", ["swelling", "edema"]),
+            ]
 
-            # If no complaint yet, always ask for the main health concern first
+            def detect_issue(text: str) -> str | None:
+                txt = text.lower()
+                for label, kws in issue_tokens:
+                    if any(k in txt for k in kws):
+                        return label
+                return None
+
+            combined_user = (earlier + " " + lower).strip()
+            issue_label = detect_issue(combined_user)
+
+            # If conclusion requested, synthesize an explicit issue-specific summary
+            if wants_conclusion:
+                duration_hint = ""
+                for kw in ["since", "for ", "days", "weeks", "months", "yesterday", "today", "this morning", "this evening"]:
+                    if kw in combined_user:
+                        duration_hint = " with reported duration details"
+                        break
+                severity_hint = ""
+                for kw in ["1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10", "mild", "moderate", "severe"]:
+                    if kw in combined_user:
+                        severity_hint = " and severity discussed"
+                        break
+                meds_hint = "; medications mentioned" if any(k in combined_user for k in ["ibuprofen","acetaminophen","paracetamol","antibiotic","inhaler","insulin","mg","dose","tablet","pill"]) else ""
+                allerg_hint = "; no allergies noted" if ("allerg" not in combined_user) else "; allergies discussed"
+                main_issue = issue_label or "chief complaint not clearly specified"
+                # Craft concise, named-issue summary
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": f"Conclusion: Patient presents with {main_issue}{duration_hint}{severity_hint}. Course and modifiers addressed as provided{meds_hint}{allerg_hint}."
+                        }
+                    }]
+                }
+
+            # Determine if the user has described any chief complaint yet
+            has_complaint = issue_label is not None
+
             if not has_complaint:
                 follow = choose(
                     "What is the main health concern or symptom you’re experiencing today?",
                     "Could you describe your primary symptom or health issue right now?",
                     "What brought you in today—what symptom or problem is bothering you most?"
                 )
-            # Symptom categories with domain-appropriate follow-ups
-            elif any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
+            elif issue_label in ["chest pain", "shortness of breath"]:
                 follow = choose(
-                    "Is the chest pain constant or intermittent, and does it worsen with activity?",
-                    "Do you feel short of breath at rest or only with exertion, and when did this begin?",
+                    "Is the chest pain constant or intermittent, and does exertion make it worse?",
+                    "Do you feel short of breath at rest or only with activity, and when did it begin?",
                 )
-            elif any(k in lower for k in ["pain", "ache", "hurt", "sore"]):
+            elif issue_label == "generalized pain":
                 follow = choose(
                     "On a 1–10 scale, how severe is your pain and when did it start?",
                     "Where exactly is the pain located, and does anything make it better or worse?",
-                    "Has the pain changed over time, and is it constant or does it come and go?",
+                    "Is the pain constant or does it come and go, and has it changed?"
                 )
-            elif any(k in lower for k in ["fever", "temperature", "chills", "sweats"]):
+            elif issue_label == "fever":
                 follow = choose(
                     "What is your highest recent temperature and how long have you had a fever?",
-                    "Are you experiencing chills or night sweats, and when did this begin?",
+                    "Are you experiencing chills or night sweats, and when did this begin?"
                 )
-            elif "cough" in lower or "phlegm" in lower or "sputum" in lower:
+            elif issue_label == "cough":
                 follow = choose(
                     "Is your cough dry or producing phlegm, and when did it start?",
-                    "Do you notice any triggers or times of day when the cough worsens?",
+                    "Do you notice any triggers or times of day when the cough worsens?"
                 )
-            elif any(k in lower for k in ["headache", "migraine"]):
+            elif issue_label == "headache":
                 follow = choose(
                     "Where is the headache located, and how severe is it on a 1–10 scale?",
-                    "Did the headache start suddenly or gradually, and any sensitivity to light or nausea?",
+                    "Did the headache start suddenly or gradually, and any light sensitivity or nausea?"
                 )
-            elif any(k in lower for k in ["nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal"]):
+            elif issue_label in ["abdominal pain", "nausea/vomiting/diarrhea"]:
                 follow = choose(
                     "Have you had vomiting or diarrhea, and when did these symptoms begin?",
-                    "Where in your abdomen is the discomfort, and is it related to meals?",
+                    "Where in your abdomen is the discomfort, and is it related to meals?"
                 )
-            elif any(k in lower for k in ["rash", "itch", "hives", "skin"]):
+            elif issue_label == "rash":
                 follow = choose(
                     "Where did the rash start and has it spread, and are you experiencing itching?",
-                    "Any new products, medications, or exposures before the rash appeared?",
+                    "Any new products, medications, or exposures before the rash appeared?"
                 )
-            elif any(k in lower for k in ["dizzy", "lightheaded", "faint"]):
+            elif issue_label == "dizziness":
                 follow = choose(
                     "When do you feel dizzy, and does it occur with standing or turning your head?",
-                    "Any recent falls, vision changes, or new medications?",
+                    "Any recent falls, vision changes, or new medications?"
                 )
             else:
-                # Generic but concise, only after a complaint exists
                 if any(k in earlier for k in ["allerg", "penicillin", "sulfa", "peanut"]):
                     follow = "Do you have any medication or food allergies we should note?"
                 elif any(k in earlier for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin"]):
@@ -286,12 +319,13 @@ class AIClient:
         if conclusion_mode:
             system_prompt = (
                 "You are a medical intake assistant. The intake is nearly complete. "
-                "Write a brief concluding summary that synthesizes the patient's main concerns, key details "
-                "(onset, severity, progression, modifiers), notable medications/allergies/history, and any red flags. "
+                "Write a brief concluding summary grounded in the patient's chief complaint (name it explicitly), and include key details "
+                "(onset/duration, severity, progression/modifiers), notable medications/allergies/relevant history, and any red flags. "
                 "Keep it concise (2–4 sentences), neutral, and factual. Start with 'Conclusion:' and do not ask questions.\n"
                 "Bad example: 'Any other concerns? Also what meds do you take?' (multiple questions)\n"
-                "Good example: 'Conclusion: Patient reports 3 days of productive cough, mild fever, no chest pain. "
-                "Symptoms gradually worsening; on acetaminophen. No known allergies. No red flags reported.'"
+                "Good examples:\n"
+                "- 'Conclusion: Patient presents with headache localized to the forehead for ~4 hours, severity 6/10; no meds taken; no known allergies. No neuro red flags reported.'\n"
+                "- 'Conclusion: 3 days of productive cough with mild fever; symptoms gradually worsening; using acetaminophen; denies chest pain or dyspnea; no red flags disclosed.'"
             )
         else:
             system_prompt = (
@@ -303,7 +337,9 @@ class AIClient:
                 "progression, modifiers, medications, allergies, relevant history, red flags.\n"
                 "- Keep under 28 words, end with a question mark, and avoid multiple questions.\n"
                 "Bad example: 'When did it start and how severe? Any triggers?'.\n"
-                "Good example: 'When did the symptoms begin, and have they changed since?' (If severity already covered, don't ask it again.)"
+                "Good examples:\n"
+                "- 'When did the symptoms begin, and have they changed since?'\n"
+                "- 'What makes the pain better or worse?'"
             )
 
         # We prepend a brief context primer so models focus on the most recent message.
@@ -474,6 +510,7 @@ class AIClient:
 
         system_prompt = (
             "You are a medical scribe. Create a clear, structured clinical intake note from the following conversation. "
+            "Explicitly identify and name the main issue in 'Chief Concern' (e.g., 'headache', 'cough', 'abdominal pain'). "
             "Sections: Chief Concern; History of Present Illness (symptoms, onset/duration, severity, course, modifiers); "
             "Medications; Allergies; Relevant History; Red Flags; Plan/Next Steps. Keep it concise and factual. "
             "If information isn't provided, mark as 'Not specified'."

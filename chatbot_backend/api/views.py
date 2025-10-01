@@ -177,11 +177,15 @@ def send_message(request):
     ai_payload = {}
     try:
         helper = AIConversationHelper()
-        question = helper.next_follow_up(convo).strip()
-        if question:
-            # Persist bot message so the conversation reflects the AI follow-up
-            cm.append_messages(convo.id, [("bot", question)])
-            ai_payload = {"ai_follow_up": {"question": question, "saved": True}}
+        bot_text = helper.next_follow_up(convo).strip()
+        if bot_text:
+            # If the bot_text appears to be a conclusion, surface it explicitly
+            payload_follow = {"question": bot_text, "saved": True}
+            if bot_text.lower().startswith("conclusion"):
+                payload_follow["conclusion"] = True
+            # Persist bot message so the conversation reflects the AI follow-up or conclusion
+            cm.append_messages(convo.id, [("bot", bot_text)])
+            ai_payload = {"ai_follow_up": payload_follow}
         else:
             ai_payload = {
                 "ai_error": {

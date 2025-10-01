@@ -34,12 +34,12 @@ Local note save directory:
 
 ## How AI is Used
 
-- Follow-up question generation
+- Follow-up question generation and conversational conclusion
   - Endpoints:
-    - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up question and returns it in the same response (and saves it as a bot message).
-    - POST /api/ai/next-follow-up/: Directly request a follow-up without sending a new message.
-  - Logic: `api.ai.AIClient.ask_follow_up()` (invoked by `AIConversationHelper`)
-  - System prompt instructs an empathetic clinical intake assistant to ask a single concise question tied to context.
+    - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up. It avoids repeating domains, advances through an intake plan, and when enough information is gathered, it returns a concluding summary (prefixed with "Conclusion:") instead of another question; this is saved as a bot message and surfaced as `ai_follow_up.conclusion=true`.
+    - POST /api/ai/next-follow-up/: Directly request a follow-up or conclusion based on context.
+  - Logic: `api.services.AIConversationHelper` orchestrates domain tracking (`Conversation.metadata.intake`) and decides whether to ask another question or produce a conclusion. It calls `api.ai.AIClient.ask_follow_up()` with improved prompts.
+  - Prompts: System messages guide the model to avoid repeats, target specific domains, and to end with a concise "Conclusion:" summary when appropriate.
 
 - Conversation summarization for clinical notes
   - Endpoints:

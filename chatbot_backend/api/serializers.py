@@ -62,3 +62,24 @@ class ConversationStatusSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
     message_count = serializers.IntegerField()
+
+
+# PUBLIC_INTERFACE
+class NextFollowUpRequestSerializer(serializers.Serializer):
+    """Request serializer for AI follow-up question generation."""
+    conversation_id = serializers.UUIDField(help_text="Conversation ID")
+
+
+# PUBLIC_INTERFACE
+class NextFollowUpResponseSerializer(serializers.Serializer):
+    """Response serializer for AI follow-up question."""
+    conversation_id = serializers.UUIDField()
+    question = serializers.CharField()
+
+
+# PUBLIC_INTERFACE
+class GenerateAndSaveSummaryRequestSerializer(serializers.Serializer):
+    """Request serializer to generate and save an AI summary to OneDrive path."""
+    conversation_id = serializers.UUIDField(help_text="Conversation ID")
+    filename = serializers.CharField(help_text="Desired filename for the note (.txt enforced)")
+    note_title = serializers.CharField(required=False, allow_blank=True, default="", help_text="Optional title for the note")

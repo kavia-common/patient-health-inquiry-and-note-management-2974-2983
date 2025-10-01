@@ -7,6 +7,8 @@ from .views import (
     generate_note,
     save_note_to_local,
     conversation_status,
+    next_follow_up,
+    generate_and_save_summary,
 )
 
 urlpatterns = [
@@ -14,7 +16,10 @@ urlpatterns = [
     path('conversations/start/', start_conversation, name='StartConversation'),
     path('conversations/send/', send_message, name='SendMessage'),
     path('conversations/continue/', continue_conversation, name='ContinueConversation'),
+    path('conversations/status/', conversation_status, name='ConversationStatus'),
+    # Notes and AI
     path('notes/generate/', generate_note, name='GenerateNote'),
     path('notes/save-local/', save_note_to_local, name='SaveNoteToLocal'),
-    path('conversations/status/', conversation_status, name='ConversationStatus'),
+    path('ai/next-follow-up/', next_follow_up, name='NextFollowUp'),
+    path('ai/generate-and-save-summary/', generate_and_save_summary, name='GenerateAndSaveSummary'),
 ]

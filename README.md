@@ -54,7 +54,16 @@ Notes:
 Local Save:
 - POST /api/notes/save-local/
   body: { conversation_id, note_text, filename }
-  behavior: Saves .txt file to C:\Nilesh_TATA\Prescription (on the host machine). API returns success/failure details.
+  behavior: Saves .txt file to ONEDRIVE_SAVE_DIR (configurable) or fallback C:\Nilesh_TATA\Prescription. API returns success/failure details.
+
+AI:
+- POST /api/ai/next-follow-up/
+  body: { conversation_id }
+  returns: { conversation_id, question }
+
+- POST /api/ai/generate-and-save-summary/
+  body: { conversation_id, filename, note_title? }
+  behavior: Generates an AI summary and saves it as .txt to ONEDRIVE_SAVE_DIR.
 
 ## Local Save Directory
 

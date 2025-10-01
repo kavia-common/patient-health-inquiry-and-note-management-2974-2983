@@ -15,9 +15,18 @@ from .serializers import (
     GenerateNoteResponseSerializer,
     LocalSaveRequestSerializer,
     ConversationStatusSerializer,
+    NextFollowUpRequestSerializer,
+    NextFollowUpResponseSerializer,
+    GenerateAndSaveSummaryRequestSerializer,
 )
 from .models import Conversation
-from .services import ConversationManager, NoteGenerator, LocalNoteStorage, LocalNoteStorageError
+from .services import (
+    ConversationManager,
+    NoteGenerator,
+    LocalNoteStorage,
+    LocalNoteStorageError,
+    AIConversationHelper,
+)
 
 
 def ocean_ok(data: dict, status_code=status.HTTP_200_OK):
@@ -216,6 +225,95 @@ def generate_note(request):
     )
     resp.is_valid(raise_exception=True)
     return ocean_ok(resp.data)
+
+
+@swagger_auto_schema(
+    method="post",
+    operation_id="next_follow_up",
+    operation_summary="AI: Get next follow-up question",
+    operation_description="Returns a concise AI-generated follow-up question based on the conversation context.",
+    request_body=NextFollowUpRequestSerializer,
+    responses={200: openapi.Response("OK", schema=openapi.Schema(type=openapi.TYPE_OBJECT))},
+    tags=["AI"],
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def next_follow_up(request):
+    """Return an AI-generated follow-up question based on conversation context."""
+    serializer = NextFollowUpRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return ocean_error("Invalid input", details=serializer.errors)
+
+    cm = ConversationManager()
+    helper = AIConversationHelper()
+    try:
+        convo = cm.get_conversation(serializer.validated_data["conversation_id"])
+        question = helper.next_follow_up(convo)
+        resp = NextFollowUpResponseSerializer(
+            data={"conversation_id": str(convo.id), "question": question}
+        )
+        resp.is_valid(raise_exception=True)
+        return ocean_ok(resp.data)
+    except Conversation.DoesNotExist:
+        return ocean_error("Conversation not found", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return ocean_error("AI follow-up generation failed", details={"detail": str(e)}, status_code=500)
+
+
+@swagger_auto_schema(
+    method="post",
+    operation_id="generate_and_save_summary",
+    operation_summary="AI: Generate and save clinical note",
+    operation_description="Generates an AI clinical note/summary from the conversation and saves it as a .txt file in the configured OneDrive directory.",
+    request_body=GenerateAndSaveSummaryRequestSerializer,
+    responses={
+        200: openapi.Response("OK", schema=openapi.Schema(type=openapi.TYPE_OBJECT)),
+        400: openapi.Response("Bad Request"),
+        404: openapi.Response("Not Found"),
+        500: openapi.Response("Server Error"),
+    },
+    tags=["AI", "Local Storage"],
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def generate_and_save_summary(request):
+    """Generate AI summary for a conversation and save it to the configured OneDrive directory (.txt).
+
+    Environment:
+    - ONEDRIVE_SAVE_DIR must point to a local path synced to OneDrive.
+    - AI_* env vars configure the AI provider.
+
+    Returns:
+      - { conversation_id, note_title, save_result: { path, bytes_written, filename } }
+    """
+    serializer = GenerateAndSaveSummaryRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return ocean_error("Invalid input", details=serializer.errors)
+
+    cm = ConversationManager()
+    ng = NoteGenerator()
+    storage = LocalNoteStorage()
+
+    try:
+        convo = cm.get_conversation(serializer.validated_data["conversation_id"])
+    except Conversation.DoesNotExist:
+        return ocean_error("Conversation not found", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+
+    try:
+        title, note_text = ng.generate_note(convo, serializer.validated_data.get("note_title", ""))
+        filename = serializer.validated_data["filename"]
+        result = storage.save_text_file(filename=filename, content=note_text)
+        return ocean_ok(
+            {
+                "conversation_id": str(convo.id),
+                "note_title": title,
+                "save_result": result,
+            }
+        )
+    except LocalNoteStorageError as e:
+        return ocean_error(str(e), code="local_save_error", status_code=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return ocean_error("AI summary generation or save failed", details={"detail": str(e)}, status_code=500)
 
 
 @swagger_auto_schema(

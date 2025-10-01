@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Patient Chatbot – Ocean Professional</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-circle">∿</div>
+        <div class="brand-text">
+          <h1>Patient Chatbot</h1>
+          <p class="subtitle">Ocean Professional</p>
+        </div>
+      </div>
+      <div class="config">
+        <label class="field">
+          <span>API Base URL</span>
+          <input id="apiBaseUrl" type="text" placeholder="https://localhost:3001/api" />
+        </label>
+        <label class="field">
+          <span>Patient ID</span>
+          <input id="patientId" type="text" placeholder="patient-123" />
+        </label>
+        <button id="startConversationBtn" class="btn btn-primary">Start Conversation</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <aside class="panel panel-info">
+        <h3>Conversation</h3>
+        <div class="kv">
+          <div>Conversation ID</div>
+          <div id="conversationId" class="mono muted">—</div>
+        </div>
+        <div class="kv">
+          <div>Message Count</div>
+          <div id="messageCount" class="mono muted">0</div>
+        </div>
+        <div class="kv">
+          <div>Last Updated</div>
+          <div id="updatedAt" class="mono muted">—</div>
+        </div>
+        <div class="hint">
+          Use the message box to chat. Click “Ask Follow-up” to let AI suggest the next question.
+        </div>
+      </aside>
+
+      <section class="chat-area panel">
+        <div id="messages" class="messages"></div>
+
+        <div class="composer">
+          <input id="messageInput" type="text" placeholder="Type your message..." />
+          <div class="composer-actions">
+            <button id="sendMsgBtn" class="btn btn-primary">Send</button>
+            <button id="askFollowBtn" class="btn btn-secondary">Ask Follow‑up</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel panel-actions">
+        <h3>Summary</h3>
+        <label class="field">
+          <span>Note Title (optional)</span>
+          <input id="noteTitle" type="text" placeholder="Clinical Intake Note" />
+        </label>
+        <label class="field">
+          <span>Save Filename</span>
+          <input id="saveFilename" type="text" placeholder="patient-123-summary.txt" />
+        </label>
+        <div class="action-buttons">
+          <button id="genSummaryBtn" class="btn btn-amber">Generate Summary</button>
+          <button id="genSaveSummaryBtn" class="btn btn-amber-outline">Generate + Save</button>
+        </div>
+        <div id="summaryOutput" class="summary-output"></div>
+        <div id="saveResult" class="save-result"></div>
+      </aside>
+    </main>
+
+    <footer class="app-footer">
+      <div class="status" id="statusBar">Idle</div>
+    </footer>
+  </div>
+
+  <script src="./script.js"></script>
+</body>
+</html>

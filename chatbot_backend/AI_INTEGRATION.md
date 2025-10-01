@@ -39,7 +39,22 @@ Local note save directory:
     - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up. It avoids repeating domains, advances through an intake plan, and when enough information is gathered, it returns a concluding summary (prefixed with "Conclusion:") instead of another question; this is saved as a bot message and surfaced as `ai_follow_up.conclusion=true`.
     - POST /api/ai/next-follow-up/: Directly request a follow-up or conclusion based on context.
   - Logic: `api.services.AIConversationHelper` orchestrates domain tracking (`Conversation.metadata.intake`) and decides whether to ask another question or produce a conclusion. It calls `api.ai.AIClient.ask_follow_up()` with improved prompts.
-  - Prompts: System messages guide the model to avoid repeats, target specific domains, and to end with a concise "Conclusion:" summary when appropriate.
+  - Prompts:
+    - The system prompt instructs the LLM to use the full recent context, avoid repeating previously covered domains, and ask exactly ONE concise question (< 28 words). If sufficient coverage is present, it synthesizes a short "Conclusion:" summary.
+    - The prompt includes small "good vs bad" examples to discourage multiple questions in one turn.
+    - A steering "primer" includes a brief recap of the last few user turns and the most recent user message to promote contextual follow-ups.
+
+### Mock Provider Behavior
+
+- The mock provider includes a lightweight rule-based system that:
+  - Detects the presence of a chief complaint and only asks for it when absolutely necessary.
+  - Diversifies question phrasing based on recent inputs (deterministic variant selection).
+  - Avoids generic templates by pivoting across domains inferred from recent user content.
+  - Produces a "Conclusion:" summary when domain coverage is sufficient or when explicitly requested.
+
+### Error Surfacing
+
+- If the LLM returns an empty response, the backend still returns success (patient message is saved) and the UI surfaces the empty result while logging hints to diagnose provider configuration issues (see `/api/ai/diagnostics/`).
 
 - Conversation summarization for clinical notes
   - Endpoints:

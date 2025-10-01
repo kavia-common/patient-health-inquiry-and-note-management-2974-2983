@@ -177,17 +177,23 @@ def send_message(request):
     ai_payload = {}
     try:
         helper = AIConversationHelper()
-        bot_text = helper.next_follow_up(convo).strip()
+        raw_text = helper.next_follow_up(convo)
+        bot_text = (raw_text or "").strip()
+
+        # Surface actual LLM output in UI even if it's empty/null.
+        payload_follow = {"question": bot_text, "saved": False}
+        if bot_text.lower().startswith("conclusion"):
+            payload_follow["conclusion"] = True
+
         if bot_text:
-            # If the bot_text appears to be a conclusion, surface it explicitly
-            payload_follow = {"question": bot_text, "saved": True}
-            if bot_text.lower().startswith("conclusion"):
-                payload_follow["conclusion"] = True
             # Persist bot message so the conversation reflects the AI follow-up or conclusion
             cm.append_messages(convo.id, [("bot", bot_text)])
+            payload_follow["saved"] = True
             ai_payload = {"ai_follow_up": payload_follow}
         else:
+            # Provide diagnostics hints when response is empty, but keep success flow.
             ai_payload = {
+                "ai_follow_up": payload_follow,
                 "ai_error": {
                     "message": "AI returned an empty response.",
                     "hints": [
@@ -200,6 +206,7 @@ def send_message(request):
     except Exception as e:
         # Do not fail the entire request; return a helpful error and keep patient message appended.
         ai_payload = {
+            "ai_follow_up": {"question": "", "saved": False},
             "ai_error": {
                 "message": str(e),
                 "hints": [
@@ -303,7 +310,8 @@ def next_follow_up(request):
     helper = AIConversationHelper()
     try:
         convo = cm.get_conversation(serializer.validated_data["conversation_id"])
-        question = helper.next_follow_up(convo)
+        question_raw = helper.next_follow_up(convo)
+        question = (question_raw or "").strip()
         resp = NextFollowUpResponseSerializer(
             data={"conversation_id": str(convo.id), "question": question}
         )
@@ -318,7 +326,7 @@ def next_follow_up(request):
             details={
                 "detail": str(e),
                 "hints": [
-                    "Ensure AI_PROVIDER is set to openai|azure_openai|litellm (or keep 'mock' for offline).",
+                    "Ensure AI_PROVIDER is set to openai|azure_openai|litellm (or keep 'mock' for offline').",
                     "Set AI_API_KEY for non-mock providers.",
                     "Set AI_MODEL (model name or Azure deployment name).",
                     "If using Azure, set AI_API_BASE and optionally AZURE_OPENAI_API_VERSION.",

@@ -42,6 +42,9 @@ Conversations:
 - POST /api/conversations/start/
   body: { patient_id, metadata? }
 - POST /api/conversations/send/
+  notes:
+    - Now uses improved AI prompting with better use of recent context and domain progression.
+    - UI surfaces actual LLM output even when empty and logs hints on unexpected shapes.
   body: { conversation_id, sender: "patient"|"bot", text, patient_id? }
   notes:
     - If conversation_id exists, the message is appended.

@@ -244,12 +244,14 @@
       state.messages.push({ sender: 'patient', text });
       els.messageInput.value = '';
 
-      // If backend generated a bot follow-up in the same response, render it now
-      if (body?.data?.ai_follow_up?.question) {
-        const q = String(body.data.ai_follow_up.question || '').trim();
-        if (q) {
-          state.messages.push({ sender: 'bot', text: q });
-        }
+      // If backend generated a bot follow-up in the same response, render it now (even if empty string)
+      if (body?.data?.ai_follow_up) {
+        const q = (body.data.ai_follow_up.question ?? '');
+        const qStr = String(q);
+        // Surface actual LLM output; if empty show ellipsis bubble to indicate AI responded with nothing
+        state.messages.push({ sender: 'bot', text: qStr.length ? qStr.trim() : '…' });
+      } else {
+        console.warn('AI follow-up payload missing or malformed.', body?.data);
       }
 
       // If backend reported AI error, surface it to the user

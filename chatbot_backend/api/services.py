@@ -191,6 +191,7 @@ class AIConversationHelper:
     - Avoids repeating domains within a window
     - Advances through domains until enough data is gathered
     - When sufficient coverage is reached, emits a 'conclusion' summary for the bot to send instead of another question
+    - Uses full recent context and a steering primer to guide LLM output
     """
 
     # Canonical clinical intake domains in desired progression order
@@ -224,6 +225,8 @@ class AIConversationHelper:
         intake.setdefault("last_domain", None)
         # track basic counters
         intake.setdefault("turns", 0)
+        # track seen text hashes to reduce repetition across turns (lightweight memory)
+        intake.setdefault("seen_prompts", [])
         return meta
 
     def _update_coverage(self, meta: dict, next_domain: str | None) -> None:
@@ -365,29 +368,24 @@ class AIConversationHelper:
 
         # If ready to conclude, instruct AI to summarize; else instruct it to ask within selected domain.
         if self._should_conclude(meta, next_domain):
-            # Build a short instruction to create a conclusion. We rely on the AIClient.summarize_dialogue
-            # when we want a full note, but here we ask a compact end-of-intake conclusion for chat.
             system_prompt = (
                 "You are a medical intake assistant. The intake is nearly complete. "
                 "Write a brief concluding summary that synthesizes the patient's main concerns, key details "
                 "(onset, severity, progression, modifiers), notable medications/allergies/history, and any red flags. "
                 "Keep it concise (2–4 sentences), neutral, and factual. Start with 'Conclusion:' and do not ask questions."
             )
-            # We ask the regular LLM chat API (ask_follow_up path) with an explicit instruction to produce a conclusion.
-            # Reuse ask_follow_up to keep provider handling consistent but override the system instruction via a tagged turn.
-            # We include a control marker to bias the provider.
             control_user = {
                 "role": "user",
                 "content": "Compose a concluding summary now. End the conversation if appropriate."
             }
             llm_dialogue = [{"role": "system", "content": system_prompt}] + dialogue + [control_user]
-            text = self.ai.ask_follow_up(dialogue=llm_dialogue)  # It will use the last 'user' content to respond
+            text = self.ai.ask_follow_up(dialogue=llm_dialogue)
 
             # Mark concluded in metadata to avoid further questions
             meta["intake"]["concluded"] = True
             conversation.metadata = meta
             conversation.save(update_fields=["metadata"])
-            # Ensure conclusion is prefixed in case the provider omitted it
+
             text = (text or "").strip()
             if text and not text.lower().startswith("conclusion"):
                 text = f"Conclusion: {text}"
@@ -415,7 +413,6 @@ class AIConversationHelper:
                 "End with a question mark."
             )
         else:
-            # Build domain-aware system prompt that also says NOT to repeat previous domains and to avoid repeating itself
             system_prompt = (
                 "You are an empathetic clinical intake assistant. Ask exactly ONE concise question (<= 28 words) "
                 "focused on the specified domain, avoiding repetition of topics already covered. "
@@ -446,4 +443,5 @@ class AIConversationHelper:
         conversation.metadata = meta
         conversation.save(update_fields=["metadata"])
 
-        return question or "Could you share a bit more detail about your symptoms?"
+        # Return actual LLM output even if empty to surface in UI; fallback is only a last resort
+        return question or ""

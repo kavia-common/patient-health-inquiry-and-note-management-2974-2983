@@ -238,35 +238,87 @@ class AIConversationHelper:
     def _determine_next_domain(self, meta: dict, patient_texts: list[str]) -> str | None:
         """Choose the next domain to ask about, skipping domains inferred from patient content.
 
-        Enforces: If the patient hasn't yet provided a main complaint, always return 'chief_concern' first.
+        Behavior improvements:
+        - Treat variations, repeats, and clarifications of symptoms as a valid chief complaint.
+        - Immediately mark chief_concern as captured once any meaningful symptom-like phrase appears.
+        - Only prompt for chief complaint if absolutely no meaningful complaint is present.
         """
         intake = meta["intake"]
         asked = set(intake.get("domains_asked", []))
 
-        joined = " ".join(patient_texts).lower()
+        # Normalize and join all patient texts
+        normalized_texts = [t.strip().lower() for t in patient_texts if isinstance(t, str)]
+        joined = " ".join(normalized_texts)
+
+        # A set of tokens/phrases that imply a complaint was provided
+        symptom_markers = [
+            # pain-like
+            "pain", "ache", "hurt", "sore", "tender", "cramp",
+            # infection/fever/cold
+            "fever", "temperature", "chills", "sweats", "cold", "flu",
+            # respiratory
+            "cough", "phlegm", "sputum", "shortness of breath", "sob", "wheez",
+            # neuro/head
+            "headache", "migraine", "dizzy", "lightheaded", "faint",
+            # gi
+            "nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal", "constipation", "bloated",
+            # derm
+            "rash", "itch", "hives", "skin", "lesion",
+            # cardio
+            "chest pain", "pressure in chest", "palpitation",
+            # misc
+            "swelling", "edema", "fatigue", "tired", "weakness",
+        ]
+
+        # Consider completely empty/meaningless messages as no complaint
+        def is_meaningful(text: str) -> bool:
+            if not text:
+                return False
+            # Filter out acknowledgements/confirmations that don't carry a complaint by themselves
+            filler = ["ok", "okay", "fine", "yes", "no", "hello", "hi", "hey", "thanks", "thank you", "please clarify"]
+            t = text.strip().lower()
+            if t in filler or len(t) < 3:
+                return False
+            return True
+
+        any_meaningful_text = any(is_meaningful(t) for t in normalized_texts)
+
         inferred = set()
-        if any(k in joined for k in ["since", "for ", "days", "weeks", "months", "start", "began"]):
+
+        # Infer non-chief domains from content
+        if any(k in joined for k in ["since", "for ", "days", "weeks", "months", "start", "began", "yesterday", "today", "this morning", "this evening"]):
             inferred.add("onset_duration")
-        if any(k in joined for k in ["1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10", "mild", "moderate", "severe", "severity"]):
+        if any(k in joined for k in ["1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10", "mild", "moderate", "severe", "severity", "intensity"]):
             inferred.add("severity")
-        if any(k in joined for k in ["worse", "improve", "better", "relieve", "trigger"]):
+        if any(k in joined for k in ["worse", "worsen", "improve", "better", "relieve", "relief", "trigger", "provok", "aggravat"]):
             inferred.add("progression")
             inferred.add("modifiers")
         if any(k in joined for k in ["allerg", "penicillin", "sulfa", "peanut"]):
             inferred.add("allergies")
-        if any(k in joined for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin", "pill", "tablet", "dose", "mg"]):
+        if any(k in joined for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin", "pill", "tablet", "dose", "mg", "medication", "medicine", "drug"]):
             inferred.add("medications")
-        if any(k in joined for k in ["history", "hx", "past medical", "pmh"]):
+        if any(k in joined for k in ["history", "hx", "past medical", "pmh", "surgery", "surgical", "chronic"]):
             inferred.add("relevant_history")
-        if any(k in joined for k in ["chest pain", "shortness of breath", "confusion", "faint", "vision loss", "weakness on one side"]):
+        if any(k in joined for k in ["chest pain", "shortness of breath", "severe headache", "confusion", "faint", "vision loss", "weakness on one side", "worst headache"]):
             inferred.add("red_flags")
-        if any(k in joined for k in ["pain", "cough", "fever", "rash", "headache", "nausea", "vomit", "diarrhea", "dizzy", "sore"]):
-            inferred.add("chief_concern")
 
-        # Enforce chief complaint first: if not inferred and not asked yet, return it now
-        if "chief_concern" not in inferred and "chief_concern" not in asked:
-            return "chief_concern"
+        # Determine whether chief complaint is present anywhere
+        complaint_present = any(marker in joined for marker in symptom_markers)
 
+        # If there is a meaningful complaint (symptom markers found), mark chief_concern as captured
+        if complaint_present and "chief_concern" not in asked:
+            # Persist this immediately in metadata so subsequent turns do not re-ask
+            intake["domains_asked"] = list(asked.union({"chief_concern"}))
+            intake["coverage_score"] = len(set(intake["domains_asked"]))
+            asked = set(intake["domains_asked"])
+
+        # If no complaint detected and nothing meaningful provided, ask for chief complaint
+        if not complaint_present and "chief_concern" not in asked:
+            # Only prompt again if user hasn't provided anything meaningful yet
+            if not any_meaningful_text:
+                return "chief_concern"
+
+        # With chief concern captured (or meaningful text present), proceed to next missing domain
         effective_asked = asked.union(inferred)
         for domain in self.DOMAIN_PLAN:
             if domain not in effective_asked:

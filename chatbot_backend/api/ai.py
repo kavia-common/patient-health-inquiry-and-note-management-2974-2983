@@ -139,11 +139,22 @@ class AIClient:
             has_complaint = any(
                 kw in (lower + " " + earlier)
                 for kw in [
-                    "pain", "ache", "hurt", "sore", "fever", "temperature", "chills", "sweats",
-                    "cough", "phlegm", "sputum", "headache", "migraine", "nausea", "vomit",
-                    "diarrhea", "stomach", "abdomen", "abdominal", "rash", "itch", "hives",
-                    "skin", "dizzy", "lightheaded", "faint", "shortness of breath", "sob",
-                    "chest pain"
+                    # pain-like
+                    "pain", "ache", "hurt", "sore", "tender", "cramp",
+                    # infection/fever/cold
+                    "fever", "temperature", "chills", "sweats", "cold", "flu",
+                    # respiratory
+                    "cough", "phlegm", "sputum", "shortness of breath", "sob", "wheez",
+                    # neuro/head
+                    "headache", "migraine", "dizzy", "lightheaded", "faint",
+                    # gi
+                    "nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal", "constipation", "bloated",
+                    # derm
+                    "rash", "itch", "hives", "skin", "lesion",
+                    # cardio
+                    "chest pain", "pressure in chest", "palpitation",
+                    # misc
+                    "swelling", "edema", "fatigue", "tired", "weakness",
                 ]
             )
 

@@ -27,3 +27,14 @@ Endpoints used:
 
 Styling:
 - Ocean Professional theme (blue/amber accents, rounded corners, subtle shadows)
+
+Proxy and multi-container guidance:
+- When this frontend is served from a proxy path like https://<host>/proxy/8000/, it will auto-detect and default API Base to https://<host>/proxy/3001/api so calls route through the same reverse proxy to the Django backend on port 3001.
+- You can always override the API Base in the UI. For proxied setups, prefer:
+  - /proxy/3001/api (relative to current origin) or
+  - https://<host>/proxy/3001/api
+- For separate containers without a top-level proxy:
+  - If the browser can reach the backend directly, use https://<backend-host>:3001/api
+  - Otherwise, configure your gateway/reverse-proxy (e.g., Nginx, Traefik) to map frontend and backend under one origin to avoid CORS complications.
+- CORS: The backend is configured with CORS_ALLOW_ALL_ORIGINS = True for development. In production, restrict allowed origins appropriately.
+- Docs: Swagger UI served by backend is at /docs (e.g., https://<host>:3001/docs). If accessed via proxy, it should be reachable at /proxy/3001/docs.

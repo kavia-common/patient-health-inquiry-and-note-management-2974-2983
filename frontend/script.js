@@ -20,11 +20,39 @@
     statusBar: document.getElementById('statusBar'),
   };
 
+  // Compute a sensible default API base when not provided by the user.
+  function computeDefaultApiBase() {
+    // If page is being served via a Kavia proxy path like /proxy/8000/,
+    // we want API to route through the proxy as /proxy/3001/api
+    try {
+      const { origin, pathname, protocol, hostname } = window.location;
+      const proxyMatch = pathname.match(/^\/proxy\/(\d+)\/?/);
+      const backendPort = 3001;
+
+      if (proxyMatch) {
+        // Under proxy path; stick to same host + /proxy/3001/api.
+        return `${origin}/proxy/${backendPort}/api`;
+      }
+
+      // Not under a proxy path. If current origin already has a port,
+      // keep the origin and append /api (assumes backend is on same host+port).
+      // Otherwise form host:3001/api.
+      const url = new URL(origin);
+      if (url.port) {
+        return `${origin}/api`;
+      }
+      return `${protocol}//${hostname}:${backendPort}/api`;
+    } catch {
+      // Fallback to last-known direct backend URL if something goes wrong.
+      return 'https://vscode-internal-36751-beta.beta01.cloud.kavia.ai:3001/api';
+    }
+  }
+
   // Default values for quick start
+  const storedApiBase = localStorage.getItem('ocean.apiBase');
   const defaults = {
-    // Set a correct default API base to the actual backend API root.
-    // You can change it in the UI; it will persist in localStorage.
-    apiBase: localStorage.getItem('ocean.apiBase') || 'https://vscode-internal-36751-beta.beta01.cloud.kavia.ai:3001/api',
+    // Prefer user override from localStorage, else compute dynamically.
+    apiBase: storedApiBase || computeDefaultApiBase(),
     patientId: localStorage.getItem('ocean.patientId') || 'patient-123',
   };
   els.apiBaseUrl.value = defaults.apiBase;
@@ -293,7 +321,10 @@
       } else {
         const detail = res.ok ? 'Unexpected response body' : `HTTP ${res.status}`;
         // Show a concise hint in UI and detailed info in console for debugging
-        setStatus(`Backend not reachable. ${detail}. Verify API Base ends with /api`, 'error');
+        const hint = window.location.pathname.startsWith('/proxy/')
+          ? 'Tip: when UI is under /proxy/8000/, set API Base to /proxy/3001/api or leave default.'
+          : 'Verify API Base ends with /api';
+        setStatus(`Backend not reachable. ${detail}. ${hint}`, 'error');
         console.warn('Health check failed:', {
           url,
           status: res.status,
@@ -304,7 +335,10 @@
       }
     } catch (err) {
       // Likely network/CORS/TLS or mixed-content blocks
-      setStatus('Backend not reachable (network/CORS/TLS). See console for details. Ensure protocol/host/port and /api are correct.', 'error');
+      const hint = window.location.pathname.startsWith('/proxy/')
+        ? 'Ensure API Base is /proxy/3001/api for proxied setup.'
+        : 'Ensure protocol/host/port and /api are correct.';
+      setStatus(`Backend not reachable (network/CORS/TLS). ${hint}`, 'error');
       console.error('Health check network error:', { url, error: err });
     }
   })();

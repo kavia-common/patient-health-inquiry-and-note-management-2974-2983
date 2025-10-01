@@ -243,9 +243,26 @@
       // Append the patient message
       state.messages.push({ sender: 'patient', text });
       els.messageInput.value = '';
+
+      // If backend generated a bot follow-up in the same response, render it now
+      if (body?.data?.ai_follow_up?.question) {
+        const q = String(body.data.ai_follow_up.question || '').trim();
+        if (q) {
+          state.messages.push({ sender: 'bot', text: q });
+        }
+      }
+
+      // If backend reported AI error, surface it to the user
+      if (body?.data?.ai_error) {
+        const msg = body.data.ai_error.message || 'AI follow-up failed.';
+        setStatus(`AI notice: ${msg}`, 'error');
+        console.warn('AI follow-up error details:', body.data.ai_error);
+      } else {
+        setStatus('Sent.');
+      }
+
       renderMessages();
       await pollStatus();
-      setStatus('Sent.');
     } catch (e) {
       console.error(e);
       setStatus(`Error: ${e.message}`, 'error');

@@ -26,6 +26,10 @@ Docs at:
 - /redoc (ReDoc)
 - /openapi.json
 
+Frontend + Proxy note:
+- When the frontend is served under a proxy path (e.g., https://<host>/proxy/8000/), the frontend automatically forces API Base to /proxy/3001/api. This ensures browser requests traverse the same reverse proxy and avoids CORS/mixed-content issues.
+- Do not use direct container URLs or internal DNS names in the browser (e.g., vscode-internal-...:3001). If you need cross-origin access, configure your gateway/proxy to present both frontend and backend under one origin.
+
 ## REST Endpoints
 
 Base path: /api

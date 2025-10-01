@@ -22,10 +22,10 @@
 
   // Compute a sensible default API base when not provided by the user.
   function computeDefaultApiBase() {
-    // If page is being served via a Kavia proxy path like /proxy/8000/,
-    // we want API to route through the proxy as /proxy/3001/api
+    // If page is being served via a proxy path like /proxy/8000/,
+    // ALWAYS route API through the same proxy as /proxy/3001/api
     try {
-      const { origin, pathname, protocol, hostname } = window.location;
+      const { origin, pathname } = window.location;
       const proxyMatch = pathname.match(/^\/proxy\/(\d+)\/?/);
       const backendPort = 3001;
 
@@ -34,25 +34,27 @@
         return `${origin}/proxy/${backendPort}/api`;
       }
 
-      // Not under a proxy path. If current origin already has a port,
-      // keep the origin and append /api (assumes backend is on same host+port).
-      // Otherwise form host:3001/api.
-      const url = new URL(origin);
-      if (url.port) {
-        return `${origin}/api`;
-      }
-      return `${protocol}//${hostname}:${backendPort}/api`;
+      // Not under a proxy path: prefer same-origin relative proxy form in case a gateway maps it,
+      // else fall back to same-origin /api (assuming backend co-served on same origin).
+      // We intentionally avoid any direct internal DNS or explicit host:port defaults.
+      return `${origin}/api`;
     } catch {
-      // Fallback to last-known direct backend URL if something goes wrong.
-      return 'https://vscode-internal-36751-beta.beta01.cloud.kavia.ai:3001/api';
+      // Last-resort safe relative path; never use internal DNS in browser.
+      return '/proxy/3001/api';
     }
   }
 
   // Default values for quick start
   const storedApiBase = localStorage.getItem('ocean.apiBase');
+  const isUnderProxy = /^\/proxy\/(\d+)\/?/.test(window.location.pathname);
+
+  // When under proxy, we override any previously stored value to enforce proxied access.
+  const effectiveDefaultApiBase = isUnderProxy
+    ? `${window.location.origin}/proxy/3001/api`
+    : (storedApiBase || computeDefaultApiBase());
+
   const defaults = {
-    // Prefer user override from localStorage, else compute dynamically.
-    apiBase: storedApiBase || computeDefaultApiBase(),
+    apiBase: effectiveDefaultApiBase,
     patientId: localStorage.getItem('ocean.patientId') || 'patient-123',
   };
   els.apiBaseUrl.value = defaults.apiBase;
@@ -71,9 +73,15 @@
   function normalizeApiBase(raw) {
     let base = (raw || '').trim();
 
+    // If browser is under a proxy path, enforce using the proxy path regardless of user-provided host.
+    if (/^\/proxy\/(\d+)\/?/.test(window.location.pathname)) {
+      // Accept relative '/proxy/3001' or absolute same-origin forms, but normalize to absolute same-origin proxy path.
+      return `${window.location.origin}/proxy/3001/api`;
+    }
+
     // If user pasted docs/redoc/openapi URL, normalize to host root
     try {
-      const u = new URL(base);
+      const u = new URL(base, window.location.origin);
       if (
         u.pathname.startsWith('/docs') ||
         u.pathname.startsWith('/redoc') ||
@@ -83,9 +91,31 @@
         u.search = '';
         u.hash = '';
         base = u.toString();
+      } else {
+        base = u.toString();
       }
     } catch {
-      // Not a valid absolute URL; leave as-is for now
+      // Non-URL input; allow relative paths like /proxy/3001/api
+    }
+
+    // Block using internal container DNS names in the browser for security and CORS stability.
+    const disallowedHosts = [
+      'vscode-internal', // generic guard against vscode-internal-*.cloud.kavia.ai direct container urls
+      '.svc.cluster.local',
+      '.internal',
+      '.docker.internal',
+    ];
+    try {
+      const parsed = new URL(base, window.location.origin);
+      const hostLower = parsed.hostname.toLowerCase();
+      if (disallowedHosts.some(h => hostLower.includes(h))) {
+        // Replace with safer default under same origin
+        base = `${window.location.origin}/proxy/3001/api`;
+      } else {
+        base = parsed.toString();
+      }
+    } catch {
+      // If still not a full URL, keep as-is (may be a relative /proxy/3001/api)
     }
 
     // Remove trailing slashes
@@ -322,8 +352,8 @@
         const detail = res.ok ? 'Unexpected response body' : `HTTP ${res.status}`;
         // Show a concise hint in UI and detailed info in console for debugging
         const hint = window.location.pathname.startsWith('/proxy/')
-          ? 'Tip: when UI is under /proxy/8000/, set API Base to /proxy/3001/api or leave default.'
-          : 'Verify API Base ends with /api';
+          ? 'Tip: when UI is under /proxy/8000/, keep API Base as /proxy/3001/api (default).'
+          : 'Verify API Base ends with /api and prefer same-origin access.';
         setStatus(`Backend not reachable. ${detail}. ${hint}`, 'error');
         console.warn('Health check failed:', {
           url,

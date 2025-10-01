@@ -22,7 +22,9 @@
 
   // Default values for quick start
   const defaults = {
-    apiBase: localStorage.getItem('ocean.apiBase') || 'https://vscode-internal-15525-beta.beta01.cloud.kavia.ai:3001/docs/?format=openapi',
+    // Set a correct default API base to the actual backend API root.
+    // You can change it in the UI; it will persist in localStorage.
+    apiBase: localStorage.getItem('ocean.apiBase') || 'https://vscode-internal-36751-beta.beta01.cloud.kavia.ai:3001/api',
     patientId: localStorage.getItem('ocean.patientId') || 'patient-123',
   };
   els.apiBaseUrl.value = defaults.apiBase;
@@ -38,8 +40,38 @@
     localStorage.setItem('ocean.patientId', els.patientId.value.trim());
   }
 
+  function normalizeApiBase(raw) {
+    let base = (raw || '').trim();
+
+    // If user pasted docs/redoc/openapi URL, normalize to host root
+    try {
+      const u = new URL(base);
+      if (
+        u.pathname.startsWith('/docs') ||
+        u.pathname.startsWith('/redoc') ||
+        u.pathname.startsWith('/openapi')
+      ) {
+        u.pathname = '/';
+        u.search = '';
+        u.hash = '';
+        base = u.toString();
+      }
+    } catch {
+      // Not a valid absolute URL; leave as-is for now
+    }
+
+    // Remove trailing slashes
+    base = base.replace(/\/*$/, '');
+
+    // Ensure it ends with /api
+    if (!/\/api$/.test(base)) {
+      base = `${base}/api`;
+    }
+    return base;
+  }
+
   function getApi(path) {
-    const base = els.apiBaseUrl.value.trim().replace(/\/+$/, '');
+    const base = normalizeApiBase(els.apiBaseUrl.value);
     return `${base}${path}`;
   }
 
@@ -252,10 +284,13 @@
     try {
       const res = await fetch(getApi('/health/'));
       const body = await res.json().catch(() => ({}));
-      if (res.ok && body?.status === 'success') setStatus('Backend reachable.');
-      else setStatus('Backend not reachable yet.');
+      if (res.ok && body?.status === 'success') {
+        setStatus('Backend reachable.');
+      } else {
+        setStatus('Backend not reachable yet. Check API Base URL ends with /api', 'error');
+      }
     } catch {
-      setStatus('Backend not reachable yet.');
+      setStatus('Backend not reachable yet. Check API Base URL ends with /api', 'error');
     }
   })();
 })();

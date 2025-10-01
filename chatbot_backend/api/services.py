@@ -236,11 +236,13 @@ class AIConversationHelper:
         intake["last_domain"] = next_domain
 
     def _determine_next_domain(self, meta: dict, patient_texts: list[str]) -> str | None:
-        """Choose the next domain to ask about, skipping domains inferred from patient content."""
+        """Choose the next domain to ask about, skipping domains inferred from patient content.
+
+        Enforces: If the patient hasn't yet provided a main complaint, always return 'chief_concern' first.
+        """
         intake = meta["intake"]
         asked = set(intake.get("domains_asked", []))
 
-        # Heuristic detection of already-covered domains from patient text
         joined = " ".join(patient_texts).lower()
         inferred = set()
         if any(k in joined for k in ["since", "for ", "days", "weeks", "months", "start", "began"]):
@@ -261,13 +263,15 @@ class AIConversationHelper:
         if any(k in joined for k in ["pain", "cough", "fever", "rash", "headache", "nausea", "vomit", "diarrhea", "dizzy", "sore"]):
             inferred.add("chief_concern")
 
-        # Treat inferred as covered to avoid repeating
-        effective_asked = asked.union(inferred)
+        # Enforce chief complaint first: if not inferred and not asked yet, return it now
+        if "chief_concern" not in inferred and "chief_concern" not in asked:
+            return "chief_concern"
 
+        effective_asked = asked.union(inferred)
         for domain in self.DOMAIN_PLAN:
             if domain not in effective_asked:
                 return domain
-        return None  # nothing left to ask
+        return None
 
     def _build_dialogue(self, conversation: Conversation) -> list[dict]:
         """Convert stored messages to OpenAI-compatible dialogue turns."""
@@ -351,15 +355,23 @@ class AIConversationHelper:
         }
         domain_hint = domain_instruction_map.get(next_domain or "", "Clarify the most relevant missing detail.")
 
-        # Build domain-aware system prompt that also says NOT to repeat previous domains and to avoid repeating itself
-        system_prompt = (
-            "You are an empathetic clinical intake assistant. Ask exactly ONE concise question (<= 28 words) "
-            "focused on the specified domain, avoiding repetition of topics already covered. "
-            "Do not provide advice or multiple questions. End with a question mark.\n"
-            f"Target domain: {next_domain or 'general'}\n"
-            f"Domain guidance: {domain_hint}\n"
-            "If the domain appears sufficiently covered in the conversation, pivot to another missing domain instead."
-        )
+        # If chief_concern is the next domain, harden the instruction to elicit the main problem first
+        if next_domain == "chief_concern":
+            system_prompt = (
+                "You are an empathetic clinical intake assistant. Ask exactly ONE short question to elicit the patient's "
+                "chief complaint (main symptom/concern). Do not ask about duration, severity, or other details yet. "
+                "End with a question mark."
+            )
+        else:
+            # Build domain-aware system prompt that also says NOT to repeat previous domains and to avoid repeating itself
+            system_prompt = (
+                "You are an empathetic clinical intake assistant. Ask exactly ONE concise question (<= 28 words) "
+                "focused on the specified domain, avoiding repetition of topics already covered. "
+                "Do not provide advice or multiple questions. End with a question mark.\n"
+                f"Target domain: {next_domain or 'general'}\n"
+                f"Domain guidance: {domain_hint}\n"
+                "If the domain appears sufficiently covered in the conversation, pivot to another missing domain instead."
+            )
 
         # Add a small steering 'user' turn to bias the model and include full dialogue
         primer = "Context summary to guide the next single question:\n"

@@ -124,23 +124,38 @@ class AIClient:
         if self.cfg.provider == "mock":
             # Deterministic but varied heuristic based on last user message and some prior context.
             messages = payload.get("messages", [])
-            # Collate dialogue user texts for context analysis
             user_texts = [m.get("content", "") for m in messages if m.get("role") == "user" and m.get("content")]
             last_user = user_texts[-1] if user_texts else ""
             lower = (last_user or "").lower()
-
-            # Look back at earlier user content for additional hints
             earlier = " ".join(user_texts[:-1]).lower() if len(user_texts) > 1 else ""
 
             def choose(*options: str) -> str:
-                # Pick an option based on simple hashing of the last_user to avoid the exact same string each time.
                 if not options:
                     return ""
                 idx = (sum(ord(c) for c in last_user) if last_user else 0) % len(options)
                 return options[idx]
 
-            # Symptom categories
-            if any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
+            # Determine if the user has described any chief complaint yet
+            has_complaint = any(
+                kw in (lower + " " + earlier)
+                for kw in [
+                    "pain", "ache", "hurt", "sore", "fever", "temperature", "chills", "sweats",
+                    "cough", "phlegm", "sputum", "headache", "migraine", "nausea", "vomit",
+                    "diarrhea", "stomach", "abdomen", "abdominal", "rash", "itch", "hives",
+                    "skin", "dizzy", "lightheaded", "faint", "shortness of breath", "sob",
+                    "chest pain"
+                ]
+            )
+
+            # If no complaint yet, always ask for the main health concern first
+            if not has_complaint:
+                follow = choose(
+                    "What is the main health concern or symptom you’re experiencing today?",
+                    "Could you describe your primary symptom or health issue right now?",
+                    "What brought you in today—what symptom or problem is bothering you most?"
+                )
+            # Symptom categories with domain-appropriate follow-ups
+            elif any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
                 follow = choose(
                     "Is the chest pain constant or intermittent, and does it worsen with activity?",
                     "Do you feel short of breath at rest or only with exertion, and when did this begin?",
@@ -182,7 +197,7 @@ class AIClient:
                     "Any recent falls, vision changes, or new medications?",
                 )
             else:
-                # Generic but concise and varied question grounded in triage needs
+                # Generic but concise, only after a complaint exists
                 if any(k in earlier for k in ["allerg", "penicillin", "sulfa", "peanut"]):
                     follow = "Do you have any medication or food allergies we should note?"
                 elif any(k in earlier for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin"]):
@@ -194,13 +209,11 @@ class AIClient:
                         "Do you have any allergies to medications or foods?",
                     )
 
-            # Ensure a trailing question mark and concise length
             follow = follow.strip()
             if not follow.endswith("?"):
                 follow += "?"
             if len(follow) > 180:
                 follow = follow[:177].rstrip() + "?"
-
             return {"choices": [{"message": {"content": follow}}]}
 
         url = self._endpoint()
@@ -269,8 +282,11 @@ class AIClient:
             system_prompt = (
                 "You are an empathetic medical triage assistant for clinical intake. Ask exactly ONE concise follow‑up "
                 "based on the patient's latest message and context. Avoid repeating prior topics. "
-                "Focus on clarifying missing details such as onset/duration, severity (1–10), progression, modifiers, "
-                "medications, allergies, relevant history, or red flags. Keep < 28 words and end with a question mark."
+                "Important: If the patient has not yet stated a main health complaint/symptom, first ask them to "
+                "briefly describe their chief complaint; do not ask about duration, severity, or other details until a "
+                "complaint is stated. After a complaint is present, proceed through relevant domains such as "
+                "onset/duration, severity (1–10), progression, modifiers, medications, allergies, relevant history, "
+                "or red flags. Keep < 28 words and end with a question mark."
             )
 
         # We prepend a brief context primer so models focus on the most recent message.
@@ -295,7 +311,7 @@ class AIClient:
 
         # Mock provider branch: generate deterministic content without network
         if self.cfg.provider == "mock":
-            # Reuse the same logic as _post but adapt to conclusion mode and domain hints.
+            # Reuse the same logic as _post but adapt to conclusion mode and domain gating.
             user_texts = [m.get("content", "") for m in messages if m.get("role") == "user" and m.get("content")]
             last_user_text = user_texts[-1] if user_texts else ""
             lower = (last_user_text or "").lower()
@@ -308,26 +324,43 @@ class AIClient:
                 return options[idx]
 
             if conclusion_mode:
-                # Short, deterministic 'Conclusion: ...' paragraph using naive heuristics
                 key_bits = []
-                if any(k in (lower + " " + earlier) for k in ["pain", "cough", "fever", "rash", "headache", "nausea", "dizzy"]):
+                combined = (lower + " " + earlier)
+                if any(k in combined for k in ["pain", "cough", "fever", "rash", "headache", "nausea", "dizzy"]):
                     key_bits.append("key symptoms discussed")
-                if any(k in (lower + " " + earlier) for k in ["since", "days", "weeks", "months"]):
+                if any(k in combined for k in ["since", "days", "weeks", "months"]):
                     key_bits.append("onset/duration noted")
-                if any(k in (lower + " " + earlier) for k in ["mild", "moderate", "severe", "1/10", "10/10"]):
+                if any(k in combined for k in ["mild", "moderate", "severe", "1/10", "10/10"]):
                     key_bits.append("severity addressed")
-                if any(k in (lower + " " + earlier) for k in ["worse", "better", "trigger", "relieve"]):
+                if any(k in combined for k in ["worse", "better", "trigger", "relieve", "improve", "fluctuat"]):
                     key_bits.append("course/modifiers covered")
-                if any(k in (lower + " " + earlier) for k in ["allerg", "penicillin", "sulfa", "peanut"]):
+                if any(k in combined for k in ["allerg", "penicillin", "sulfa", "peanut"]):
                     key_bits.append("allergy info present")
-                if any(k in (lower + " " + earlier) for k in ["ibuprofen", "acetaminophen", "antibiotic", "inhaler", "insulin"]):
+                if any(k in combined for k in ["ibuprofen", "acetaminophen", "antibiotic", "inhaler", "insulin", "dose", "mg"]):
                     key_bits.append("medications mentioned")
 
                 bits = ", ".join(key_bits) if key_bits else "core intake details"
-                return f"Conclusion: Intake summarized with {bits}. No further clarifying questions remain at this time."
+                text = f"Conclusion: Intake summarized with {bits}. No further clarifying questions remain at this time."
+                return text
 
-            # Non-conclusion: produce a concise follow-up similar to original mock, with a bit more domain variety
-            if any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
+            # Gate on chief complaint
+            has_complaint = any(
+                kw in (lower + " " + earlier)
+                for kw in [
+                    "pain", "ache", "hurt", "sore", "fever", "temperature", "chills", "sweats",
+                    "cough", "phlegm", "sputum", "headache", "migraine", "nausea", "vomit",
+                    "diarrhea", "stomach", "abdomen", "abdominal", "rash", "itch", "hives",
+                    "skin", "dizzy", "lightheaded", "faint", "shortness of breath", "sob",
+                    "chest pain"
+                ]
+            )
+            if not has_complaint:
+                follow = choose(
+                    "What is the main health concern or symptom you’re experiencing today?",
+                    "Could you describe your primary symptom or health issue right now?",
+                    "What brought you in today—what symptom or problem is bothering you most?"
+                )
+            elif any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
                 follow = choose(
                     "Is the chest pain constant or intermittent, and does activity make it worse?",
                     "Do you feel short of breath at rest or only with exertion, and when did this begin?",

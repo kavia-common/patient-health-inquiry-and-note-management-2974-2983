@@ -1,5 +1,5 @@
 Title: Disease Note for Patient patient-123
-Conversation ID: 32544d5b-04e7-4909-91fb-c62bb109ef4f
+Conversation ID: 7e75b11d-ff71-4fb1-8a7c-3a91bea83cec
 Patient ID: patient-123
 
-What is the main health concern or symptom you’re experiencing today?
+Where exactly is the pain located, and does anything make it better or worse?

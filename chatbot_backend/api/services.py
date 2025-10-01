@@ -49,6 +49,8 @@ class NoteGenerator:
     def generate_note(self, conversation: Conversation, note_title: str = "") -> Tuple[str, str]:
         """Generate a note text from a conversation using AI if configured; fallback to heuristic.
 
+        Guarantees:
+        - The returned note text is a synthesized clinical summary, never a question or a prompt.
         Returns (title, text).
         """
         messages = conversation.messages.all()
@@ -57,14 +59,34 @@ class NoteGenerator:
             role = "user" if m.sender == "patient" else "assistant"
             dialogue.append({"role": role, "content": m.text})
 
+        def _looks_like_question(text: str) -> bool:
+            t = (text or "").strip().lower()
+            if not t:
+                return False
+            if t.endswith("?"):
+                return True
+            starts = [
+                "what", "when", "where", "why", "how", "do you", "did you", "are you", "is it", "could you",
+                "can you", "would you", "please describe", "tell me", "have you", "any", "which", "who",
+                "next question", "follow-up", "follow up", "let me ask", "one more"
+            ]
+            return any(t.startswith(s) for s in starts)
+
         title = note_title.strip() or f"Disease Note for Patient {conversation.patient_id}"
 
         try:
             ai_text = self.ai.summarize_dialogue(dialogue=dialogue, patient_id=conversation.patient_id)
-            text = f"Title: {title}\nConversation ID: {conversation.id}\nPatient ID: {conversation.patient_id}\n\n{ai_text}"
+            # Final guard: if AI returned question-like content, synthesize a summary instead
+            final_text = ai_text.strip()
+            if _looks_like_question(final_text):
+                raise ValueError("AI summarizer returned a question; will synthesize summary from conversation.")
+            # Also ensure we don't end with a question accidentally
+            if final_text.endswith("?"):
+                final_text = final_text.rstrip("?").rstrip() + "."
+            text = f"Title: {title}\nConversation ID: {conversation.id}\nPatient ID: {conversation.patient_id}\n\n{final_text}"
             return title, text
         except Exception:
-            # Fallback to prior heuristic composition
+            # Fallback to prior heuristic composition with stronger synthesis to avoid questions
             patient_lines = [m.text.strip() for m in messages if m.sender == "patient" and m.text.strip()]
             bot_lines = [m.text.strip() for m in messages if m.sender == "bot" and m.text.strip()]
 
@@ -79,35 +101,54 @@ class NoteGenerator:
                 low = line.lower()
                 if any(k in low for k in ["pain", "fever", "cough", "nausea", "headache", "dizzy", "rash", "fatigue", "sore"]):
                     symptoms.append(line)
-                if "week" in low or "day" in low or "month" in low:
+                if "week" in low or "day" in low or "month" in low or "since" in low or "for " in low or "yesterday" in low or "today" in low:
                     duration = line if duration is None else duration
-                if any(k in low for k in ["mild", "moderate", "severe", "worse", "improving"]):
+                if any(k in low for k in ["mild", "moderate", "severe", "worse", "improving", "/10", "1/10", "2/10", "3/10", "4/10", "5/10", "6/10", "7/10", "8/10", "9/10", "10/10"]):
                     severity = line if severity is None else severity
-                if any(k in low for k in ["med", "medicine", "drug", "pill", "ibuprofen", "acetaminophen", "paracetamol", "antibiotic"]):
+                if any(k in low for k in ["med", "medicine", "drug", "pill", "ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin", "dose", "mg", "supplement", "vitamin"]):
                     meds.append(line)
-                if "allerg" in low:
+                if "allerg" in low or "penicillin" in low or "sulfa" in low or "peanut" in low:
                     allergies.append(line)
                 if any(k in low for k in ["concern", "worried", "afraid"]):
                     concerns.append(line)
+
+            # Detect chief concern label
+            combined_user = " ".join([p.lower() for p in patient_lines[-6:]])
+            issue_terms = [
+                ("chest pain", ["chest pain","pressure in chest"]),
+                ("shortness of breath", ["shortness of breath","sob"]),
+                ("headache", ["headache","migraine"]),
+                ("cough", ["cough","phlegm","sputum"]),
+                ("fever", ["fever","temperature","chills","sweats"]),
+                ("abdominal pain", ["stomach","abdomen","abdominal","belly pain"]),
+                ("nausea/vomiting/diarrhea", ["nausea","vomit","diarrhea"]),
+                ("rash", ["rash","itch","hives","skin","lesion"]),
+                ("dizziness", ["dizzy","lightheaded","faint"]),
+                ("generalized pain", ["pain","ache","hurt","sore","tender","cramp"]),
+                ("fatigue", ["fatigue","tired","weakness"]),
+                ("swelling", ["swelling","edema"]),
+            ]
+            detected_issue = None
+            for label, kws in issue_terms:
+                if any(k in combined_user for k in kws):
+                    detected_issue = label
+                    break
+            if not detected_issue:
+                detected_issue = "chief complaint not clearly specified"
 
             lines = [
                 f"Title: {title}",
                 f"Conversation ID: {conversation.id}",
                 f"Patient ID: {conversation.patient_id}",
-                f"Created: {conversation.created_at.isoformat()}",
-                f"Updated: {conversation.updated_at.isoformat()}",
                 "",
-                "Chief Concerns:",
-                *([f"- {c}" for c in concerns] or ["- Not specified"]),
+                "Chief Concern:",
+                f"- {detected_issue}",
                 "",
-                "Reported Symptoms:",
-                *([f"- {s}" for s in symptoms] or ["- Not specified"]),
-                "",
-                "Duration:",
-                f"- {duration or 'Not specified'}",
-                "",
-                "Severity:",
-                f"- {severity or 'Not specified'}",
+                "History of Present Illness:",
+                f"- Symptoms: {( '; '.join(symptoms) if symptoms else 'Not specified')}",
+                f"- Onset/Duration: {duration or 'Not specified'}",
+                f"- Severity: {severity or 'Not specified'}",
+                f"- Course/Modifiers: {'Not specified'}",
                 "",
                 "Medications:",
                 *([f"- {m}" for m in meds] or ["- Not specified"]),
@@ -115,13 +156,23 @@ class NoteGenerator:
                 "Allergies:",
                 *([f"- {a}" for a in allergies] or ["- Not specified"]),
                 "",
-                "Context (last bot prompts):",
+                "Relevant History:",
+                "- Not specified",
+                "",
+                "Red Flags:",
+                "- Not specified",
+                "",
+                "Context (last assistant prompts):",
                 *([f"- {b}" for b in bot_lines[-3:]] or ["- Not available"]),
                 "",
                 "Generated At:",
                 f"- {datetime.utcnow().isoformat()}Z",
             ]
-            return title, "\n".join(lines)
+            synthesized = "\n".join(lines).strip()
+            # Ensure no trailing question artifacts remain
+            if synthesized.endswith("?"):
+                synthesized = synthesized.rstrip("?").rstrip() + "."
+            return title, synthesized
 
 
 # PUBLIC_INTERFACE

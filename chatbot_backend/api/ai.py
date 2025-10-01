@@ -401,7 +401,7 @@ class AIClient:
                 if any(k in recent_context for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin", "mg"]):
                     flags.append("medications mentioned")
                 summary_hint = ", ".join(flags) if flags else "core intake details summarized"
-                return f"Conclusion: Intake summary with {summary_hint}. No further clarifying questions at this time."
+                return "Conclusion: Intake summary with " + summary_hint + ". No further clarifying questions at this time."
 
             if not has_complaint:
                 follow = choose(
@@ -503,17 +503,97 @@ class AIClient:
 
     # PUBLIC_INTERFACE
     def summarize_dialogue(self, dialogue: List[dict], patient_id: str) -> str:
-        """Generate a concise clinical note from a conversation."""
+        """Generate a concise clinical note from a conversation.
+
+        Guarantees:
+        - Never returns a question or prompt as the final note.
+        - If the LLM (or mock) returns a question-like output (ends with '?', starts with follow-up language),
+          synthesize a concise structured summary directly from user messages.
+        """
         ok, detail = self.cfg.validate()
         if not ok:
             raise AIClientError(f"AI configuration invalid: {detail.get('hint') or 'Check environment variables.'}")
+
+        # Helper to check if text looks like a question/prompt (not a clinical summary)
+        def _looks_like_question(text: str) -> bool:
+            t = (text or "").strip().lower()
+            if not t:
+                return False
+            if t.endswith("?"):
+                return True
+            starts = [
+                "what", "when", "where", "why", "how", "do you", "did you", "are you", "is it", "could you",
+                "can you", "would you", "please describe", "tell me", "have you", "any", "which", "who",
+                "next question", "follow-up", "follow up", "let me ask", "one more"
+            ]
+            return any(t.startswith(s) for s in starts)
+
+        # Helper to synthesize a concise structured summary from the dialogue (user messages)
+        def _synthesize_from_user(dialogue_turns: List[dict]) -> str:
+            user_lines = [m.get("content", "").strip() for m in dialogue_turns if m.get("role") == "user" and m.get("content")]
+            bot_lines = [m.get("content", "").strip() for m in dialogue_turns if m.get("role") == "assistant" and m.get("content")]
+            recent_user = " ".join(user_lines[-5:]).lower()
+
+            issue_terms = [
+                ("chest pain", ["chest pain","pressure in chest"]),
+                ("shortness of breath", ["shortness of breath","sob"]),
+                ("headache", ["headache","migraine"]),
+                ("cough", ["cough","phlegm","sputum"]),
+                ("fever", ["fever","temperature","chills","sweats"]),
+                ("abdominal pain", ["stomach","abdomen","abdominal","belly pain"]),
+                ("nausea/vomiting/diarrhea", ["nausea","vomit","diarrhea"]),
+                ("rash", ["rash","itch","hives","skin","lesion"]),
+                ("dizziness", ["dizzy","lightheaded","faint"]),
+                ("generalized pain", ["pain","ache","hurt","sore","tender","cramp"]),
+                ("fatigue", ["fatigue","tired","weakness"]),
+                ("swelling", ["swelling","edema"]),
+            ]
+            detected_issue = None
+            for label, kws in issue_terms:
+                if any(k in recent_user for k in kws):
+                    detected_issue = label
+                    break
+            if not detected_issue:
+                # fallback heuristic
+                if any(k in recent_user for k in ["pain","ache","sore","hurt","tender","cramp"]):
+                    detected_issue = "generalized pain"
+                elif any(k in recent_user for k in ["temperature","chills","sweats"]):
+                    detected_issue = "fever"
+                else:
+                    detected_issue = "chief complaint not clearly specified"
+
+            def present_if(cond, text):
+                return text if cond else None
+
+            duration = present_if(any(k in recent_user for k in ["since","for ","days","weeks","months","yesterday","today","this morning","this evening"]), "onset/duration mentioned")
+            severity = present_if(any(k in recent_user for k in ["1/10","/10","mild","moderate","severe","intensity"]), "severity discussed")
+            progression = present_if(any(k in recent_user for k in ["worse","worsen","better","improve","improving","gradual","sudden","changed","progression"]), "course/progression addressed")
+            modifiers = present_if(any(k in recent_user for k in ["trigger","aggravat","relieve","relief","better with","worse with"]), "modifiers discussed")
+            meds = present_if(any(k in recent_user for k in ["ibuprofen","acetaminophen","paracetamol","antibiotic","inhaler","insulin","pill","tablet","dose","mg","medication","medicine","drug","supplement","vitamin"]), "medications mentioned")
+            allergies = present_if(any(k in recent_user for k in ["allerg","penicillin","sulfa","peanut","latex"]), "allergies discussed")
+            redflags = present_if(any(k in recent_user for k in ["severe headache","worst headache","confusion","faint","vision loss","weakness on one side","chest pain","shortness of breath"]), "red flags screened/mentioned")
+
+            hints = [h for h in [duration, severity, progression, modifiers, meds, allergies, redflags] if h]
+            hints_text = "; " + "; ".join(hints) if hints else ""
+            # Last few bot prompts may be useful context to reflect
+            last_bot = [b for b in bot_lines[-2:] if b]
+            last_bot_context = " Context from assistant: " + " ".join(last_bot) if last_bot else ""
+
+            # Compose short 2–4 sentences neutral summary
+            return (
+                f"Chief Concern: {detected_issue.capitalize()}.\n"
+                f"History of Present Illness: Patient reports concerns consistent with {detected_issue}{hints_text}. "
+                f"Details derived from recent dialogue.{last_bot_context}\n"
+                f"Medications/Allergies/History: Summarized as mentioned by patient; unspecified items marked as not specified.\n"
+                f"Plan/Next Steps: Continue clinical intake and escalate if red flags emerge."
+            )
 
         system_prompt = (
             "You are a medical scribe. Create a clear, structured clinical intake note from the following conversation. "
             "Explicitly identify and name the main issue in 'Chief Concern' (e.g., 'headache', 'cough', 'abdominal pain'). "
             "Sections: Chief Concern; History of Present Illness (symptoms, onset/duration, severity, course, modifiers); "
             "Medications; Allergies; Relevant History; Red Flags; Plan/Next Steps. Keep it concise and factual. "
-            "If information isn't provided, mark as 'Not specified'."
+            "Do not ask any questions or include prompts. If information isn't provided, mark as 'Not specified'."
         )
         user_prompt = f"Patient ID: {patient_id}\nConversation:\n" + "\n".join(
             f"{m['role'].capitalize()}: {m['content']}" for m in dialogue
@@ -528,13 +608,25 @@ class AIClient:
             "n": 1,
             "max_tokens": 800,
         }
+
+        # Get provider output (or mock)
         data = self._post(payload)
         content = (
             data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
         )
-        return (content or "").strip()
+        content = (content or "").strip()
+
+        # Enforce: never return a question/prompt
+        if not content or _looks_like_question(content):
+            content = _synthesize_from_user(dialogue)
+
+        # As a final guard, if still ends with question style, strip trailing question and assert declarative period.
+        c = content.strip()
+        if c.endswith("?"):
+            c = c.rstrip("?").rstrip() + "."
+        return c
 
     # PUBLIC_INTERFACE
     def live_check(self) -> Dict[str, Any]:

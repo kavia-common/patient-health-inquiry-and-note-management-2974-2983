@@ -22,7 +22,7 @@
 
   // Default values for quick start
   const defaults = {
-    apiBase: localStorage.getItem('ocean.apiBase') || 'http://localhost:3001/api',
+    apiBase: localStorage.getItem('ocean.apiBase') || 'https://vscode-internal-15525-beta.beta01.cloud.kavia.ai:3001/docs/?format=openapi',
     patientId: localStorage.getItem('ocean.patientId') || 'patient-123',
   };
   els.apiBaseUrl.value = defaults.apiBase;

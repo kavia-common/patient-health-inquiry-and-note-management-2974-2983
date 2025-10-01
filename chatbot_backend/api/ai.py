@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
 
 import requests
 
@@ -29,6 +29,30 @@ class AIConfig:
         model = os.getenv("AI_MODEL", "gpt-4o-mini")
         api_base = os.getenv("AI_API_BASE")
         return AIConfig(provider=provider, api_key=api_key, model=model, api_base=api_base)
+
+    # PUBLIC_INTERFACE
+    def validate(self) -> Tuple[bool, Dict[str, Any]]:
+        """Validate configuration and return (ok, details) with actionable hints."""
+        details: Dict[str, Any] = {
+            "provider": self.provider,
+            "has_api_key": bool(self.api_key),
+            "model": self.model,
+            "api_base": self.api_base,
+        }
+        if self.provider == "mock":
+            return True, {**details, "note": "Mock mode: no external API calls."}
+
+        # For real providers, ensure api key and model
+        if not self.api_key:
+            return False, {**details, "hint": "Set AI_API_KEY in environment for provider."}
+        if not self.model:
+            return False, {**details, "hint": "Set AI_MODEL in environment for provider."}
+
+        if self.provider == "azure_openai":
+            if not self.api_base:
+                return False, {**details, "hint": "Azure OpenAI requires AI_API_BASE (endpoint URL)."}
+        # Others are fine with default bases.
+        return True, details
 
 
 # PUBLIC_INTERFACE
@@ -107,7 +131,7 @@ class AIClient:
                     break
             # Generate a basic follow-up based on keywords
             follow = "Could you tell me more about your symptoms, their duration, severity, and any medications you are taking?"
-            low = last_user.lower()
+            low = (last_user or "").lower()
             if any(k in low for k in ["pain", "ache", "hurt"]):
                 follow = "On a scale from 1-10, how severe is your pain, and when did it start?"
             elif any(k in low for k in ["fever", "temperature"]):
@@ -118,7 +142,19 @@ class AIClient:
 
         url = self._endpoint()
         headers = self._headers()
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        except requests.exceptions.Timeout as e:
+            raise AIClientError("AI provider request timed out. Check network/connectivity and try again.") from e
+        except requests.exceptions.ConnectionError as e:
+            raise AIClientError("Unable to reach AI provider endpoint. Verify AI_API_BASE/Internet connectivity.") from e
+        except requests.exceptions.RequestException as e:
+            raise AIClientError(f"Unexpected error contacting AI provider: {e}") from e
+
+        if resp.status_code == 401:
+            raise AIClientError("Unauthorized by AI provider (401). Verify AI_API_KEY is valid and not expired.")
+        if resp.status_code == 404:
+            raise AIClientError("AI endpoint or deployment not found (404). Check AI_API_BASE and AI_MODEL/deployment.")
         if resp.status_code >= 400:
             raise AIClientError(f"AI provider error {resp.status_code}: {resp.text}")
         return resp.json()
@@ -129,6 +165,11 @@ class AIClient:
 
         dialogue: list of {"role": "user"|"assistant", "content": "..."}
         """
+        ok, detail = self.cfg.validate()
+        if not ok:
+            # Provide actionable hint but allow mock fallback if configured as such
+            raise AIClientError(f"AI configuration invalid: {detail.get('hint') or 'Check environment variables.'}")
+
         system_prompt = (
             "You are a clinical intake assistant. Ask one concise, empathetic, "
             "health-related follow-up question based strictly on the patient's last message and prior context. "
@@ -149,11 +190,15 @@ class AIClient:
             .get("message", {})
             .get("content", "")
         )
-        return content.strip()
+        return (content or "").strip()
 
     # PUBLIC_INTERFACE
     def summarize_dialogue(self, dialogue: List[dict], patient_id: str) -> str:
         """Generate a concise clinical note from a conversation."""
+        ok, detail = self.cfg.validate()
+        if not ok:
+            raise AIClientError(f"AI configuration invalid: {detail.get('hint') or 'Check environment variables.'}")
+
         system_prompt = (
             "You are a medical scribe. Create a clear, structured clinical intake note from the following conversation. "
             "Sections: Chief Concern, History of Present Illness (symptoms, onset/duration, severity, modifiers), "
@@ -179,4 +224,45 @@ class AIClient:
             .get("message", {})
             .get("content", "")
         )
-        return content.strip()
+        return (content or "").strip()
+
+    # PUBLIC_INTERFACE
+    def live_check(self) -> Dict[str, Any]:
+        """Attempt a lightweight provider call to validate connectivity and credentials.
+
+        Returns a dict describing success/failure and diagnostic hints.
+        """
+        # For mock, no real call needed
+        if self.cfg.provider == "mock":
+            ok, cfg = self.cfg.validate()
+            return {"ok": ok, "provider": self.cfg.provider, "mode": "mock", "details": cfg}
+
+        ok, details = self.cfg.validate()
+        if not ok:
+            return {"ok": False, "provider": self.cfg.provider, "details": details}
+
+        try:
+            payload = {
+                "model": self.cfg.model,
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "Reply with a single word: ok."},
+                ],
+                "temperature": 0.0,
+                "n": 1,
+                "max_tokens": 2,
+            }
+            data = self._post(payload)
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+            return {"ok": True, "provider": self.cfg.provider, "content_preview": (content or "")[:50]}
+        except AIClientError as e:
+            return {
+                "ok": False,
+                "provider": self.cfg.provider,
+                "error": str(e),
+                "hint": "Verify AI_API_KEY, AI_MODEL, and AI_API_BASE (if Azure).",
+            }

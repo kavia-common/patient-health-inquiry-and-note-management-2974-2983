@@ -47,6 +47,14 @@ Local note save directory:
 
 If the AI call fails, services fall back to a rule-based summary generation (`NoteGenerator` fallback path).
 
+## Diagnostics and No-Restart Credential Refresh
+
+- Runtime reads: The AI client reads AI_* environment variables at call time, so you can update credentials without restarting the server.
+- Use GET `/api/ai/diagnostics/` to:
+  - Inspect current AI_* configuration status (missing keys, wrong base URL, etc.)
+  - Perform a live connectivity check against the provider with a tiny request
+  - Receive actionable hints on how to fix common issues
+
 ## Optional RAG
 
 You can front an OpenAI-compatible RAG gateway (e.g., LiteLLM routing to a retrieval pipeline) and set:
@@ -65,10 +73,11 @@ The backend sends conversation messages as standard OpenAI Chat API payloads, so
    - POST /api/ai/next-follow-up/
    - POST /api/notes/generate/
    - POST /api/ai/generate-and-save-summary/
+3) After setting real AI_* credentials, call:
+   - GET /api/ai/diagnostics/ to verify connectivity and credentials are accepted
 
 ## Security Notes
 
 - Do not hard-code API keys. Use environment variables.
 - In production, restrict CORS and secure your gateway/proxy.
 - Sanitize and limit conversation data retained if PHI/PII policies apply.
-

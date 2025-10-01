@@ -4,6 +4,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from .ai import AIClient, AIConfig
+
 # PUBLIC_INTERFACE
 @swagger_auto_schema(
     method="get",
@@ -14,7 +16,8 @@ from rest_framework.response import Response
         "Endpoints:\n"
         "- POST /api/ai/next-follow-up/: Returns a concise AI-generated follow-up question.\n"
         "- POST /api/notes/generate/: Generates an AI-backed note (view only).\n"
-        "- POST /api/ai/generate-and-save-summary/: Generates an AI note and saves it to local storage.\n\n"
+        "- POST /api/ai/generate-and-save-summary/: Generates an AI note and saves it to local storage.\n"
+        "- GET  /api/ai/diagnostics/: Shows provider configuration status and performs a live connectivity check.\n\n"
         "Configuration:\n"
         "- AI_PROVIDER: mock|openai|azure_openai|litellm\n"
         "- AI_API_KEY: API key for non-mock providers\n"
@@ -39,6 +42,7 @@ def ai_usage_help(request):
                     "next_follow_up": "/api/ai/next-follow-up/",
                     "generate_note": "/api/notes/generate/",
                     "generate_and_save_summary": "/api/ai/generate-and-save-summary/",
+                    "diagnostics": "/api/ai/diagnostics/",
                 },
                 "env": {
                     "AI_PROVIDER": "mock|openai|azure_openai|litellm",
@@ -53,3 +57,37 @@ def ai_usage_help(request):
             },
         }
     )
+
+# PUBLIC_INTERFACE
+@swagger_auto_schema(
+    method="get",
+    operation_id="ai_diagnostics",
+    operation_summary="AI diagnostics and live connectivity check",
+    operation_description=(
+        "Inspects current AI_* environment configuration and attempts a lightweight chat completion "
+        "to verify credentials and connectivity without restarting the server."
+    ),
+    responses={
+        200: openapi.Response("OK", schema=openapi.Schema(type=openapi.TYPE_OBJECT)),
+        500: openapi.Response("Server Error"),
+    },
+    tags=["AI"],
+)
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def ai_diagnostics(request):
+    """Return provider config status and perform a live connectivity check."""
+    cfg = AIConfig.from_env()
+    ok, detail = cfg.validate()
+    client = AIClient(cfg)
+    live = client.live_check()
+    status_str = "success" if (ok and live.get("ok")) else "error"
+    http_code = 200 if status_str == "success" else 200  # Always 200 but carry status/error inside payload
+
+    payload = {
+        "config_ok": ok,
+        "config": detail if isinstance(detail, dict) else {"provider": cfg.provider},
+        "live_check": live,
+        "note": "Update AI_* env and re-call this endpoint to refresh; no restart required for runtime reads.",
+    }
+    return Response({"status": status_str, "theme": "ocean-professional", "data": payload}, status=http_code)

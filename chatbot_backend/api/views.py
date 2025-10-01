@@ -257,7 +257,21 @@ def next_follow_up(request):
     except Conversation.DoesNotExist:
         return ocean_error("Conversation not found", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        return ocean_error("AI follow-up generation failed", details={"detail": str(e)}, status_code=500)
+        # Provide actionable hints for common misconfigurations
+        return ocean_error(
+            "AI follow-up generation failed",
+            details={
+                "detail": str(e),
+                "hints": [
+                    "Ensure AI_PROVIDER is set to openai|azure_openai|litellm (or keep 'mock' for offline).",
+                    "Set AI_API_KEY for non-mock providers.",
+                    "Set AI_MODEL (model name or Azure deployment name).",
+                    "If using Azure, set AI_API_BASE and optionally AZURE_OPENAI_API_VERSION.",
+                    "Use GET /api/ai/diagnostics/ to validate connectivity and credentials live.",
+                ],
+            },
+            status_code=500,
+        )
 
 
 @swagger_auto_schema(
@@ -313,7 +327,18 @@ def generate_and_save_summary(request):
     except LocalNoteStorageError as e:
         return ocean_error(str(e), code="local_save_error", status_code=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        return ocean_error("AI summary generation or save failed", details={"detail": str(e)}, status_code=500)
+        return ocean_error(
+            "AI summary generation or save failed",
+            details={
+                "detail": str(e),
+                "hints": [
+                    "Verify AI_* environment variables (AI_PROVIDER, AI_API_KEY, AI_MODEL, AI_API_BASE for Azure).",
+                    "Try GET /api/ai/diagnostics/ to test connectivity and credentials.",
+                    "Check local save directory (ONEDRIVE_SAVE_DIR or legacy path) permissions if save step failed.",
+                ],
+            },
+            status_code=500,
+        )
 
 
 @swagger_auto_schema(

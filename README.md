@@ -47,6 +47,7 @@ Conversations:
     - If conversation_id exists, the message is appended.
     - If conversation_id does not exist and patient_id is provided, a new conversation is created for that patient and the message is appended. Response status 201.
     - If conversation_id does not exist and patient_id is not provided, 404 is returned with a helpful hint.
+    - After saving the message, the backend automatically generates an AI follow-up question and returns it in the same response as `ai_follow_up.question`. On failure, an `ai_error` is included and the user message remains saved.
 - POST /api/conversations/continue/
   body: { conversation_id, messages: [{sender, text}, ...] }
 - GET /api/conversations/status/?conversation_id=<uuid>

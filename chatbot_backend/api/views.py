@@ -103,7 +103,15 @@ def start_conversation(request):
         "Appends a single message to an existing conversation. "
         "If the provided conversation_id does not match an existing conversation and a patient_id is provided in the body, "
         "a new conversation will be created for that patient and the message appended. "
-        "If conversation_id is invalid or not found and patient_id is not provided, a 404 error is returned."
+        "If conversation_id is invalid or not found and patient_id is not provided, a 404 error is returned.\n\n"
+        "Additionally, this endpoint will automatically generate an AI-powered follow-up question based on the updated "
+        "conversation and return it in the same response. On success, the bot follow-up is also saved into the conversation.\n\n"
+        "Response fields:\n"
+        "- conversation_id: UUID string of the active conversation\n"
+        "- appended: number of patient messages appended (always 1)\n"
+        "- created_new_conversation: boolean indicating if a new conversation was created\n"
+        "- ai_follow_up: { question: string, saved: boolean } when AI generation succeeds\n"
+        "- ai_error: { message: string, hints: string[] } when AI generation fails (patient message still saved)"
     ),
     request_body=MessageSerializer,
     responses={
@@ -118,12 +126,18 @@ def start_conversation(request):
 @permission_classes([AllowAny])
 def send_message(request):
     """
-    Append a single message to a conversation.
+    Append a single message to a conversation and automatically generate a bot follow-up.
 
-    Public behavior:
-    - If conversation exists: append message.
-    - If conversation does not exist and patient_id provided: create conversation then append message.
+    PUBLIC_INTERFACE
+    This is the primary chat entrypoint. After saving the user's message, the backend uses the
+    configured AI provider to generate a concise follow-up question and persists it as a bot message.
+
+    Behavior:
+    - If conversation exists: append patient message, then generate and save AI follow-up.
+    - If conversation does not exist and patient_id provided: create conversation, append message, then generate and save AI follow-up.
     - Otherwise: return 404 with guidance.
+
+    Returns a success payload even if AI generation fails; in that case, includes an ai_error with hints.
     """
     serializer = MessageSerializer(data=request.data)
     if not serializer.is_valid():
@@ -135,18 +149,19 @@ def send_message(request):
     text = serializer.validated_data["text"]
     patient_id = serializer.validated_data.get("patient_id")
 
+    created = False
+    status_code = status.HTTP_200_OK
+
     try:
+        # Append patient message to existing conversation
         cm.append_messages(conversation_id, [(sender, text)])
-        created = False
-        convo_id_str = str(conversation_id)
-        status_code = status.HTTP_200_OK
+        convo = cm.get_conversation(conversation_id)
     except Conversation.DoesNotExist:
-        # Graceful handling: create if patient_id provided; else return detailed 404
+        # Create new conversation if patient_id is provided
         if patient_id:
             convo = cm.start_conversation(patient_id=patient_id, metadata={})
             cm.append_messages(convo.id, [(sender, text)])
             created = True
-            convo_id_str = str(convo.id)
             status_code = status.HTTP_201_CREATED
         else:
             return ocean_error(
@@ -158,11 +173,47 @@ def send_message(request):
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
+    # After appending the patient's message, generate AI follow-up and save it
+    ai_payload = {}
+    try:
+        helper = AIConversationHelper()
+        question = helper.next_follow_up(convo).strip()
+        if question:
+            # Persist bot message so the conversation reflects the AI follow-up
+            cm.append_messages(convo.id, [("bot", question)])
+            ai_payload = {"ai_follow_up": {"question": question, "saved": True}}
+        else:
+            ai_payload = {
+                "ai_error": {
+                    "message": "AI returned an empty response.",
+                    "hints": [
+                        "If using a real provider, verify AI_MODEL supports chat completions.",
+                        "Consider using mock provider to validate flow without external calls.",
+                        "Check /api/ai/diagnostics/ for configuration and connectivity.",
+                    ],
+                }
+            }
+    except Exception as e:
+        # Do not fail the entire request; return a helpful error and keep patient message appended.
+        ai_payload = {
+            "ai_error": {
+                "message": str(e),
+                "hints": [
+                    "Ensure AI_PROVIDER is set to openai|azure_openai|litellm (or keep 'mock' for offline).",
+                    "Set AI_API_KEY for non-mock providers.",
+                    "Set AI_MODEL (model name or Azure deployment name).",
+                    "If using Azure, set AI_API_BASE and optionally AZURE_OPENAI_API_VERSION.",
+                    "Use GET /api/ai/diagnostics/ to validate connectivity and credentials live.",
+                ],
+            }
+        }
+
     return ocean_ok(
         {
-            "conversation_id": convo_id_str,
+            "conversation_id": str(convo.id),
             "appended": 1,
             "created_new_conversation": created,
+            **ai_payload,
         },
         status_code=status_code,
     )

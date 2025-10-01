@@ -35,8 +35,10 @@ Local note save directory:
 ## How AI is Used
 
 - Follow-up question generation
-  - Endpoint: POST /api/ai/next-follow-up/
-  - Logic: `api.ai.AIClient.ask_follow_up()`
+  - Endpoints:
+    - POST /api/conversations/send/: After a user message is saved, the backend automatically generates a follow-up question and returns it in the same response (and saves it as a bot message).
+    - POST /api/ai/next-follow-up/: Directly request a follow-up without sending a new message.
+  - Logic: `api.ai.AIClient.ask_follow_up()` (invoked by `AIConversationHelper`)
   - System prompt instructs an empathetic clinical intake assistant to ask a single concise question tied to context.
 
 - Conversation summarization for clinical notes

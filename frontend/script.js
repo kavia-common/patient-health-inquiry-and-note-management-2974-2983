@@ -279,18 +279,33 @@
   els.genSummaryBtn.addEventListener('click', () => generateSummary(true));
   els.genSaveSummaryBtn.addEventListener('click', () => generateSummary(false));
 
-  // Try quick backend health check to update status
+  // Try quick backend health check to update status with better diagnostics
   (async function initHealth() {
+    const url = getApi('/health/');
     try {
-      const res = await fetch(getApi('/health/'));
-      const body = await res.json().catch(() => ({}));
-      if (res.ok && body?.status === 'success') {
+      const res = await fetch(url, { method: 'GET' });
+      const text = await res.text().catch(() => '');
+      let body = {};
+      try { body = JSON.parse(text); } catch { /* not json */ }
+
+      if (res.ok && body && body.status === 'success') {
         setStatus('Backend reachable.');
       } else {
-        setStatus('Backend not reachable yet. Check API Base URL ends with /api', 'error');
+        const detail = res.ok ? 'Unexpected response body' : `HTTP ${res.status}`;
+        // Show a concise hint in UI and detailed info in console for debugging
+        setStatus(`Backend not reachable. ${detail}. Verify API Base ends with /api`, 'error');
+        console.warn('Health check failed:', {
+          url,
+          status: res.status,
+          ok: res.ok,
+          textSnippet: (text || '').slice(0, 200),
+          parsed: body,
+        });
       }
-    } catch {
-      setStatus('Backend not reachable yet. Check API Base URL ends with /api', 'error');
+    } catch (err) {
+      // Likely network/CORS/TLS or mixed-content blocks
+      setStatus('Backend not reachable (network/CORS/TLS). See console for details. Ensure protocol/host/port and /api are correct.', 'error');
+      console.error('Health check network error:', { url, error: err });
     }
   })();
 })();

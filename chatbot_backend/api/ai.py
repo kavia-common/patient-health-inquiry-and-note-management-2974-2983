@@ -122,22 +122,85 @@ class AIClient:
     def _post(self, payload: dict) -> dict:
         # No network for mock
         if self.cfg.provider == "mock":
-            # Respond with a naive echo/heuristic result
+            # Deterministic but varied heuristic based on last user message and some prior context.
             messages = payload.get("messages", [])
-            last_user = ""
-            for m in reversed(messages):
-                if m.get("role") == "user":
-                    last_user = m.get("content", "")
-                    break
-            # Generate a basic follow-up based on keywords
-            follow = "Could you tell me more about your symptoms, their duration, severity, and any medications you are taking?"
-            low = (last_user or "").lower()
-            if any(k in low for k in ["pain", "ache", "hurt"]):
-                follow = "On a scale from 1-10, how severe is your pain, and when did it start?"
-            elif any(k in low for k in ["fever", "temperature"]):
-                follow = "What is your current temperature and how long have you had a fever?"
-            elif "cough" in low:
-                follow = "Is your cough dry or productive, and are there any triggers or times it worsens?"
+            # Collate dialogue user texts for context analysis
+            user_texts = [m.get("content", "") for m in messages if m.get("role") == "user" and m.get("content")]
+            last_user = user_texts[-1] if user_texts else ""
+            lower = (last_user or "").lower()
+
+            # Look back at earlier user content for additional hints
+            earlier = " ".join(user_texts[:-1]).lower() if len(user_texts) > 1 else ""
+
+            def choose(*options: str) -> str:
+                # Pick an option based on simple hashing of the last_user to avoid the exact same string each time.
+                if not options:
+                    return ""
+                idx = (sum(ord(c) for c in last_user) if last_user else 0) % len(options)
+                return options[idx]
+
+            # Symptom categories
+            if any(k in lower for k in ["chest pain", "pressure in chest", "shortness of breath", "sob"]):
+                follow = choose(
+                    "Is the chest pain constant or intermittent, and does it worsen with activity?",
+                    "Do you feel short of breath at rest or only with exertion, and when did this begin?",
+                )
+            elif any(k in lower for k in ["pain", "ache", "hurt", "sore"]):
+                follow = choose(
+                    "On a 1–10 scale, how severe is your pain and when did it start?",
+                    "Where exactly is the pain located, and does anything make it better or worse?",
+                    "Has the pain changed over time, and is it constant or does it come and go?",
+                )
+            elif any(k in lower for k in ["fever", "temperature", "chills", "sweats"]):
+                follow = choose(
+                    "What is your highest recent temperature and how long have you had a fever?",
+                    "Are you experiencing chills or night sweats, and when did this begin?",
+                )
+            elif "cough" in lower or "phlegm" in lower or "sputum" in lower:
+                follow = choose(
+                    "Is your cough dry or producing phlegm, and when did it start?",
+                    "Do you notice any triggers or times of day when the cough worsens?",
+                )
+            elif any(k in lower for k in ["headache", "migraine"]):
+                follow = choose(
+                    "Where is the headache located, and how severe is it on a 1–10 scale?",
+                    "Did the headache start suddenly or gradually, and any sensitivity to light or nausea?",
+                )
+            elif any(k in lower for k in ["nausea", "vomit", "diarrhea", "stomach", "abdomen", "abdominal"]):
+                follow = choose(
+                    "Have you had vomiting or diarrhea, and when did these symptoms begin?",
+                    "Where in your abdomen is the discomfort, and is it related to meals?",
+                )
+            elif any(k in lower for k in ["rash", "itch", "hives", "skin"]):
+                follow = choose(
+                    "Where did the rash start and has it spread, and are you experiencing itching?",
+                    "Any new products, medications, or exposures before the rash appeared?",
+                )
+            elif any(k in lower for k in ["dizzy", "lightheaded", "faint"]):
+                follow = choose(
+                    "When do you feel dizzy, and does it occur with standing or turning your head?",
+                    "Any recent falls, vision changes, or new medications?",
+                )
+            else:
+                # Generic but concise and varied question grounded in triage needs
+                if any(k in earlier for k in ["allerg", "penicillin", "sulfa", "peanut"]):
+                    follow = "Do you have any medication or food allergies we should note?"
+                elif any(k in earlier for k in ["ibuprofen", "acetaminophen", "paracetamol", "antibiotic", "inhaler", "insulin"]):
+                    follow = "What medications or supplements are you currently taking and their doses?"
+                else:
+                    follow = choose(
+                        "How long have these symptoms been present, and are they getting better or worse?",
+                        "Have you taken any medications or remedies, and did they help?",
+                        "Do you have any allergies to medications or foods?",
+                    )
+
+            # Ensure a trailing question mark and concise length
+            follow = follow.strip()
+            if not follow.endswith("?"):
+                follow += "?"
+            if len(follow) > 180:
+                follow = follow[:177].rstrip() + "?"
+
             return {"choices": [{"message": {"content": follow}}]}
 
         url = self._endpoint()
@@ -170,15 +233,46 @@ class AIClient:
             # Provide actionable hint but allow mock fallback if configured as such
             raise AIClientError(f"AI configuration invalid: {detail.get('hint') or 'Check environment variables.'}")
 
+        # Build a short synopsis to foreground the last user message while preserving full context.
+        last_user = ""
+        prior_user_context = []
+        for m in reversed(dialogue):
+            if m.get("role") == "user" and m.get("content"):
+                if not last_user:
+                    last_user = m["content"]
+                else:
+                    # collect up to a few prior user messages for added context variety
+                    if len(prior_user_context) < 3:
+                        prior_user_context.append(m["content"])
+            if last_user and len(prior_user_context) >= 3:
+                break
+        prior_user_context = list(reversed(prior_user_context))
+
         system_prompt = (
-            "You are a clinical intake assistant. Ask one concise, empathetic, "
-            "health-related follow-up question based strictly on the patient's last message and prior context. "
-            "Focus on clarifying symptoms, onset/duration, severity, medications, allergies, or red flags. "
-            "Keep it under 30 words and ask only one question."
+            "You are an empathetic medical triage assistant for clinical intake. Your task is to ask exactly ONE "
+            "concise follow‑up question based on the patient's latest message, taking prior context into account. "
+            "Prioritize clarifying symptoms, onset/duration, severity (1–10), progression, relevant meds, allergies, "
+            "red flags (e.g., chest pain, shortness of breath, confusion), or needed specifics for safe triage. "
+            "Do not provide advice or multiple questions. Keep the question under 30 words and end with a question mark."
         )
+
+        # We prepend a brief context primer so models focus on the most recent message.
+        primer = "Context summary for the assistant:\n"
+        if prior_user_context:
+            primer += "Earlier patient details:\n- " + "\n- ".join(s.strip() for s in prior_user_context if s.strip()) + "\n"
+        if last_user:
+            primer += f"Most recent patient message: {last_user.strip()}\n"
+
+        messages = [{"role": "system", "content": system_prompt}]
+        # Provide a user turn that summarizes context to bias the model toward the latest info,
+        # then include the full dialogue so the provider can ground the response.
+        if primer.strip():
+            messages.append({"role": "user", "content": primer})
+        messages.extend(dialogue)
+
         payload = {
             "model": self.cfg.model,
-            "messages": [{"role": "system", "content": system_prompt}] + dialogue,
+            "messages": messages,
             "temperature": 0.4,
             "n": 1,
             "max_tokens": 120,
@@ -201,8 +295,8 @@ class AIClient:
 
         system_prompt = (
             "You are a medical scribe. Create a clear, structured clinical intake note from the following conversation. "
-            "Sections: Chief Concern, History of Present Illness (symptoms, onset/duration, severity, modifiers), "
-            "Medications, Allergies, Relevant History, Red Flags, Plan/Next Steps. Keep it concise and factual. "
+            "Sections: Chief Concern; History of Present Illness (symptoms, onset/duration, severity, course, modifiers); "
+            "Medications; Allergies; Relevant History; Red Flags; Plan/Next Steps. Keep it concise and factual. "
             "If information isn't provided, mark as 'Not specified'."
         )
         user_prompt = f"Patient ID: {patient_id}\nConversation:\n" + "\n".join(

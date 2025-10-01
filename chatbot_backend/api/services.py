@@ -181,14 +181,23 @@ class LocalNoteStorage:
 
 # PUBLIC_INTERFACE
 class AIConversationHelper:
-    """Helper that uses AI to generate dynamic follow-up questions based on stored conversation."""
+    """Helper that uses AI to generate dynamic follow-up questions based on stored conversation.
+
+    The AI provider is configured via environment variables (see .env.example and AI_INTEGRATION.md).
+    If AI is set to 'mock', a deterministic, symptom-aware follow-up is returned without external API calls.
+    """
 
     def __init__(self, ai: AIClient | None = None) -> None:
         self.ai = ai or AIClient()
 
     # PUBLIC_INTERFACE
     def next_follow_up(self, conversation: Conversation) -> str:
-        """Return the next follow-up question based on conversation context."""
+        """Return the next follow-up question based on conversation context.
+
+        The conversation is converted into OpenAI-compatible chat messages:
+        - Patient messages => role=user
+        - Bot messages => role=assistant
+        """
         messages = conversation.messages.all()
         dialogue = []
         for m in messages:

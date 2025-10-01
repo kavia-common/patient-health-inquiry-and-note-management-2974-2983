@@ -10,9 +10,11 @@ from .views import (
     next_follow_up,
     generate_and_save_summary,
 )
+from .ai_docs import ai_usage_help
 
 urlpatterns = [
     path('health/', health, name='Health'),
+    path('ai/help/', ai_usage_help, name='AIUsageHelp'),
     path('conversations/start/', start_conversation, name='StartConversation'),
     path('conversations/send/', send_message, name='SendMessage'),
     path('conversations/continue/', continue_conversation, name='ContinueConversation'),

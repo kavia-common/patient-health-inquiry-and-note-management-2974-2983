@@ -10,7 +10,8 @@ Style: Ocean Professional (clean, modern, minimalist; blue/amber accents)
 ## Quick start
 
 1) Environment variables
-- Copy `.env.example` to `.env` and update if needed. OneDrive variables are no longer used.
+- Copy `chatbot_backend/.env.example` to `chatbot_backend/.env` and update if needed.
+- AI provider defaults to `mock` (no external API calls). To enable OpenAI/Azure/LiteLLM, set AI_* vars accordingly. See `chatbot_backend/AI_INTEGRATION.md`.
 
 2) Install Python dependencies
 - pip install -r chatbot_backend/requirements.txt
